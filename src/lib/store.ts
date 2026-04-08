@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Account, Transaction, Category, Budget, Asset, VaultDocument, Alert, UserSettings } from './types';
-import { sampleAccounts, sampleTransactions, sampleCategories, sampleBudgets, sampleAssets, sampleDocuments, sampleAlerts } from './sample-data';
+import { Account, Transaction, Category, Budget, Asset, VaultDocument, Alert, UserSettings, Loan, JournalEntry } from './types';
+import { sampleAccounts, sampleTransactions, sampleCategories, sampleBudgets, sampleAssets, sampleDocuments, sampleAlerts, sampleLoans, sampleJournalEntries } from './sample-data';
 
 interface FinOSState {
   settings: UserSettings;
@@ -10,6 +10,8 @@ interface FinOSState {
   categories: Category[];
   budgets: Budget[];
   assets: Asset[];
+  loans: Loan[];
+  journalEntries: JournalEntry[];
   documents: VaultDocument[];
   alerts: Alert[];
   isVaultLocked: boolean;
@@ -19,6 +21,7 @@ interface FinOSState {
   netWorth: () => number;
   totalPortfolioValue: () => number;
   totalPortfolioCost: () => number;
+  totalLoanOutstanding: () => number;
   monthlyIncome: () => number;
   monthlyExpenses: () => number;
 
@@ -37,6 +40,8 @@ export const useFinOS = create<FinOSState>()(
       categories: sampleCategories,
       budgets: sampleBudgets,
       assets: sampleAssets,
+      loans: sampleLoans,
+      journalEntries: sampleJournalEntries,
       documents: sampleDocuments,
       alerts: sampleAlerts,
       isVaultLocked: true,
@@ -45,10 +50,12 @@ export const useFinOS = create<FinOSState>()(
       netWorth: () => {
         const accBal = get().accounts.reduce((sum, a) => sum + a.balance, 0);
         const assetVal = get().assets.reduce((sum, a) => sum + a.currentPrice * a.quantity, 0);
-        return accBal + assetVal;
+        const loanBal = get().loans.filter(l => l.status === 'active').reduce((sum, l) => sum + l.outstandingAmount, 0);
+        return accBal + assetVal - loanBal;
       },
       totalPortfolioValue: () => get().assets.reduce((sum, a) => sum + a.currentPrice * a.quantity, 0),
       totalPortfolioCost: () => get().assets.reduce((sum, a) => sum + a.buyPrice * a.quantity, 0),
+      totalLoanOutstanding: () => get().loans.filter(l => l.status === 'active').reduce((sum, l) => sum + l.outstandingAmount, 0),
       monthlyIncome: () => get().transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0),
       monthlyExpenses: () => get().transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0),
 
