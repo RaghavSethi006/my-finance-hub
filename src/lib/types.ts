@@ -15,9 +15,10 @@ export const CURRENCY_CONFIG: Record<Currency, { symbol: string; name: string; l
 export type AccountType = 'cash' | 'bank' | 'credit_card' | 'investment' | 'crypto';
 export type TransactionType = 'income' | 'expense' | 'transfer';
 export type PaymentMethod = 'cash' | 'card' | 'upi' | 'netbanking' | 'crypto';
-export type AssetType = 'stock' | 'crypto' | 'real_estate' | 'vehicle' | 'gold' | 'other';
+export type AssetType = 'stock' | 'mutual_fund' | 'crypto' | 'real_estate' | 'vehicle' | 'gold' | 'other';
 export type DocumentCategory = 'banking' | 'tax' | 'legal' | 'personal' | 'other';
 export type TaxTag = 'business' | 'personal' | 'untagged';
+export type LoanStatus = 'active' | 'paid_off' | 'defaulted';
 
 export interface Account {
   id: string;
@@ -78,6 +79,40 @@ export interface Asset {
   currency: Currency;
   purchaseDate: string;
   notes?: string;
+  // Mutual fund specific
+  fundHouse?: string;
+  nav?: number;
+  sipAmount?: number;
+}
+
+export interface Loan {
+  id: string;
+  name: string;
+  lender: string;
+  type: 'home' | 'car' | 'personal' | 'education' | 'business' | 'credit_card' | 'other';
+  principalAmount: number;
+  outstandingAmount: number;
+  interestRate: number;
+  emi: number;
+  tenure: number; // months
+  startDate: string;
+  endDate: string;
+  currency: Currency;
+  status: LoanStatus;
+  linkedAccountId?: string;
+}
+
+export interface JournalEntry {
+  id: string;
+  date: string;
+  description: string;
+  entries: {
+    accountName: string;
+    accountType: 'asset' | 'liability' | 'income' | 'expense' | 'equity';
+    debit: number;
+    credit: number;
+  }[];
+  transactionId?: string;
 }
 
 export interface VaultDocument {
