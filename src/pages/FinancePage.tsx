@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useState, useMemo } from "react";
-import { CURRENCY_CONFIG, Currency, TransactionType, PaymentMethod, TaxTag, AccountType, Account, Transaction } from "@/lib/types";
+import { CURRENCY_CONFIG, Currency, TransactionType, PaymentMethod, TaxTag, AccountType, Account, Transaction, Budget } from "@/lib/types";
 import { toast } from "sonner";
 
 const ACCOUNT_TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -28,7 +28,22 @@ function generateId() {
 }
 
 export default function FinancePage() {
-  const { transactions, accounts, categories, budgets, settings, addTransaction, updateTransaction, deleteTransaction, addAccount, updateAccount, deleteAccount } = useFinOS();
+  const {
+    transactions,
+    accounts,
+    categories,
+    budgets,
+    settings,
+    addTransaction,
+    updateTransaction,
+    deleteTransaction,
+    addAccount,
+    updateAccount,
+    deleteAccount,
+    addBudget,
+    updateBudget,
+    deleteBudget,
+  } = useFinOS();
 
   // Filters
   const [search, setSearch] = useState('');
@@ -45,9 +60,11 @@ export default function FinancePage() {
   const [accModalOpen, setAccModalOpen] = useState(false);
   const [editingAcc, setEditingAcc] = useState<Account | null>(null);
   const [accDetailOpen, setAccDetailOpen] = useState(false);
+  const [budgetModalOpen, setBudgetModalOpen] = useState(false);
+  const [editingBudget, setEditingBudget] = useState<Budget | null>(null);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<{ type: 'tx' | 'acc'; id: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'tx' | 'acc' | 'bud'; id: string } | null>(null);
   const [showAccountNumbers, setShowAccountNumbers] = useState<Record<string, boolean>>({});
 
   // Transaction form state
@@ -61,6 +78,12 @@ export default function FinancePage() {
   const [accForm, setAccForm] = useState({
     name: '', type: 'bank' as AccountType, balance: '', currency: settings.defaultCurrency as Currency,
     bankName: '', accountNumber: '', ifscCode: '', branchName: '', nominees: '', loginUrl: '', notes: '',
+  });
+  const [budgetForm, setBudgetForm] = useState({
+    categoryId: '',
+    amount: '',
+    currency: settings.defaultCurrency as Currency,
+    alertThreshold: '80',
   });
 
   // Filtered transactions
@@ -143,10 +166,68 @@ export default function FinancePage() {
     setAccModalOpen(false);
   };
 
+  const openAddBudget = () => {
+    setEditingBudget(null);
+    setBudgetForm({
+      categoryId: budgets[0]?.categoryId || expenseCats[0]?.id || '',
+      amount: '',
+      currency: settings.defaultCurrency,
+      alertThreshold: '80',
+    });
+    setBudgetModalOpen(true);
+  };
+
+  const openEditBudget = (budget: Budget) => {
+    setEditingBudget(budget);
+    setBudgetForm({
+      categoryId: budget.categoryId,
+      amount: budget.amount.toString(),
+      currency: budget.currency,
+      alertThreshold: budget.alertThreshold.toString(),
+    });
+    setBudgetModalOpen(true);
+  };
+
+  const saveBudget = () => {
+    const amount = parseFloat(budgetForm.amount);
+    const alertThreshold = parseFloat(budgetForm.alertThreshold);
+
+    if (!budgetForm.categoryId) { toast.error('Select a category'); return; }
+    if (!Number.isFinite(amount) || amount <= 0) { toast.error('Enter a valid budget amount'); return; }
+    if (!Number.isFinite(alertThreshold) || alertThreshold <= 0 || alertThreshold > 100) { toast.error('Alert threshold must be between 1 and 100'); return; }
+
+    const duplicateBudget = budgets.find((budget) => budget.categoryId === budgetForm.categoryId && budget.id !== editingBudget?.id);
+    if (duplicateBudget) { toast.error('A budget already exists for that category'); return; }
+
+    if (editingBudget) {
+      updateBudget(editingBudget.id, {
+        categoryId: budgetForm.categoryId,
+        amount,
+        currency: budgetForm.currency,
+        alertThreshold,
+      });
+      toast.success('Budget updated');
+    } else {
+      addBudget({
+        id: generateId(),
+        categoryId: budgetForm.categoryId,
+        amount,
+        currency: budgetForm.currency,
+        spent: 0,
+        alertThreshold,
+        period: 'monthly',
+      });
+      toast.success('Budget added');
+    }
+
+    setBudgetModalOpen(false);
+  };
+
   const confirmDelete = () => {
     if (!deleteTarget) return;
     if (deleteTarget.type === 'tx') { deleteTransaction(deleteTarget.id); toast.success('Transaction deleted'); }
     if (deleteTarget.type === 'acc') { deleteAccount(deleteTarget.id); toast.success('Account deleted'); }
+    if (deleteTarget.type === 'bud') { deleteBudget(deleteTarget.id); toast.success('Budget deleted'); }
     setDeleteConfirmOpen(false);
     setDeleteTarget(null);
   };
@@ -374,18 +455,30 @@ export default function FinancePage() {
         </TabsContent>
 
         {/* ========== BUDGETS ========== */}
-        <TabsContent value="budgets" className="mt-4">
+        <TabsContent value="budgets" className="mt-4 space-y-4">
+          <div className="flex justify-end">
+            <Button className="gap-2" onClick={openAddBudget}><Plus className="h-4 w-4" /> Add Budget</Button>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {budgets.map(b => {
               const cat = categories.find(c => c.id === b.categoryId);
-              const pct = (b.spent / b.amount) * 100;
+              const pct = b.amount > 0 ? (b.spent / b.amount) * 100 : 0;
               const remaining = b.amount - b.spent;
               return (
-                <Card key={b.id}>
+                <Card key={b.id} className="group">
                   <CardContent className="pt-5">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium">{cat?.name}</span>
-                      <Badge variant={pct >= 90 ? 'destructive' : 'secondary'} className="text-xs">{pct.toFixed(0)}%</Badge>
+                      <div>
+                        <span className="text-sm font-medium">{cat?.name}</span>
+                        <p className="text-xs text-muted-foreground mt-1">Alert at {b.alertThreshold}%</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={pct >= 90 ? 'destructive' : 'secondary'} className="text-xs">{pct.toFixed(0)}%</Badge>
+                        <div className="hidden group-hover:flex gap-1">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEditBudget(b)}><Edit2 className="h-3 w-3" /></Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-loss" onClick={() => { setDeleteTarget({ type: 'bud', id: b.id }); setDeleteConfirmOpen(true); }}><Trash2 className="h-3 w-3" /></Button>
+                        </div>
+                      </div>
                     </div>
                     <div className="h-2 rounded-full bg-secondary overflow-hidden mb-2">
                       <div className={`h-full rounded-full transition-all ${pct >= 90 ? 'bg-loss' : pct >= 70 ? 'bg-warning' : 'bg-profit'}`} style={{ width: `${Math.min(pct, 100)}%` }} />
@@ -394,10 +487,24 @@ export default function FinancePage() {
                       <span>{formatCurrency(b.spent, b.currency)} spent</span>
                       <span>{formatCurrency(remaining, b.currency)} left</span>
                     </div>
+                    <div className="mt-3 flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Budget</span>
+                      <span className="font-mono font-medium">{formatCurrency(b.amount, b.currency)}</span>
+                    </div>
                   </CardContent>
                 </Card>
               );
             })}
+            {budgets.length === 0 && (
+              <Card className="border-dashed">
+                <CardContent className="min-h-[180px] flex items-center justify-center text-center text-muted-foreground">
+                  <div>
+                    <p className="text-sm">No budgets configured yet</p>
+                    <Button variant="outline" size="sm" className="mt-3" onClick={openAddBudget}>Create your first budget</Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </TabsContent>
       </Tabs>
@@ -643,6 +750,53 @@ export default function FinancePage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={budgetModalOpen} onOpenChange={setBudgetModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingBudget ? 'Edit Budget' : 'Add Budget'}</DialogTitle>
+            <DialogDescription>Set a monthly spending target for one category.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label className="text-xs">Category</Label>
+              <Select value={budgetForm.categoryId} onValueChange={value => setBudgetForm(form => ({ ...form, categoryId: value }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {expenseCats.map(category => (
+                    <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Amount</Label>
+                <Input type="number" step="0.01" value={budgetForm.amount} onChange={event => setBudgetForm(form => ({ ...form, amount: event.target.value }))} />
+              </div>
+              <div>
+                <Label className="text-xs">Currency</Label>
+                <Select value={budgetForm.currency} onValueChange={value => setBudgetForm(form => ({ ...form, currency: value as Currency }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(CURRENCY_CONFIG) as Currency[]).map(currency => (
+                      <SelectItem key={currency} value={currency}>{CURRENCY_CONFIG[currency].symbol} {currency}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Alert Threshold (%)</Label>
+              <Input type="number" min="1" max="100" step="1" value={budgetForm.alertThreshold} onChange={event => setBudgetForm(form => ({ ...form, alertThreshold: event.target.value }))} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBudgetModalOpen(false)}>Cancel</Button>
+            <Button onClick={saveBudget}>{editingBudget ? 'Update' : 'Add'} Budget</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
