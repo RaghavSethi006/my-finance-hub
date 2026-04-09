@@ -11,7 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
-app-data
+data/finance.db
+data/vault/
 
 # Editor directories and files
 .vscode/*

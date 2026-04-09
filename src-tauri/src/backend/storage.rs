@@ -71,7 +71,7 @@ fn resolve_data_dir(_app: &AppHandle) -> Result<PathBuf, String> {
     let project_root = src_tauri_dir
       .parent()
       .ok_or_else(|| String::from("Unable to resolve project root for development data"))?;
-    return Ok(project_root.join("app-data"));
+    return Ok(project_root.join("data"));
   }
 
   let exe_path = env::current_exe().map_err(|error| format!("Unable to resolve current executable: {error}"))?;
@@ -82,25 +82,41 @@ fn resolve_data_dir(_app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn migrate_legacy_data(app: &AppHandle, data_dir: &Path) -> Result<(), String> {
-  let legacy_dir = app
+  let legacy_app_dir = app
     .path()
     .app_data_dir()
     .map_err(|error| format!("Unable to resolve legacy app data directory: {error}"))?;
 
-  if legacy_dir == data_dir || !legacy_dir.exists() {
-    return Ok(());
+  let mut legacy_dirs = Vec::new();
+  if legacy_app_dir != data_dir {
+    legacy_dirs.push(legacy_app_dir);
   }
 
-  let legacy_db = legacy_dir.join("finance.db");
+  let src_tauri_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+  if let Some(project_root) = src_tauri_dir.parent() {
+    let legacy_project_dir = project_root.join("app-data");
+    if legacy_project_dir != data_dir {
+      legacy_dirs.push(legacy_project_dir);
+    }
+  }
+
   let new_db = data_dir.join("finance.db");
-  if legacy_db.exists() && !new_db.exists() {
-    fs::copy(&legacy_db, &new_db).map_err(|error| format!("Unable to migrate legacy database: {error}"))?;
-  }
-
-  let legacy_vault = legacy_dir.join("vault");
   let new_vault = data_dir.join("vault");
-  if legacy_vault.exists() && !new_vault.exists() {
-    copy_directory(&legacy_vault, &new_vault)?;
+
+  for legacy_dir in legacy_dirs {
+    if !legacy_dir.exists() {
+      continue;
+    }
+
+    let legacy_db = legacy_dir.join("finance.db");
+    if legacy_db.exists() && !new_db.exists() {
+      fs::copy(&legacy_db, &new_db).map_err(|error| format!("Unable to migrate legacy database: {error}"))?;
+    }
+
+    let legacy_vault = legacy_dir.join("vault");
+    if legacy_vault.exists() && !new_vault.exists() {
+      copy_directory(&legacy_vault, &new_vault)?;
+    }
   }
 
   Ok(())
