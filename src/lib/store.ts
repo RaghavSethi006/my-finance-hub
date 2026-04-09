@@ -69,6 +69,8 @@ interface FinOSState extends SerializableFinOSState {
   updateBudget: (id: string, updates: Partial<Budget>) => void;
   deleteBudget: (id: string) => void;
   addCategory: (c: Category) => void;
+  updateCategory: (id: string, updates: Partial<Category>) => void;
+  deleteCategory: (id: string) => void;
   addDocument: (document: VaultDocument) => void;
   updateDocument: (id: string, updates: Partial<VaultDocument>) => void;
   deleteDocument: (id: string) => void;
@@ -607,6 +609,20 @@ export const useFinOS = create<FinOSState>()(
 
         addCategory: (category) => {
           set((state) => ({ categories: [...state.categories, category] }));
+          syncToDesktop();
+        },
+
+        updateCategory: (id, updates) => {
+          set((state) => ({
+            categories: state.categories.map((category) => (category.id === id ? { ...category, ...updates } : category)),
+          }));
+          syncToDesktop();
+        },
+
+        deleteCategory: (id) => {
+          set((state) => ({
+            categories: state.categories.filter((category) => category.id !== id),
+          }));
           syncToDesktop();
         },
 
