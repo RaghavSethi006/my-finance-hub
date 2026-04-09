@@ -48,3 +48,7 @@ export async function importVaultDocument(payload: ImportVaultDocumentRequest): 
 export async function deleteVaultDocument(documentId: string): Promise<void> {
   await invokeDesktop('delete_vault_document', { documentId });
 }
+
+export async function readVaultDocument(documentId: string): Promise<number[]> {
+  return invokeDesktop<number[]>('read_vault_document', { documentId });
+}

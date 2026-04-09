@@ -57,6 +57,18 @@ pub fn delete_vault_document(conn: &Connection, document_id: &str) -> Result<(),
   Ok(())
 }
 
+pub fn read_vault_document(conn: &Connection, document_id: &str) -> Result<Vec<u8>, String> {
+  let file_path: String = conn
+    .query_row(
+      "SELECT file_path FROM vault_documents WHERE id = ?",
+      [document_id],
+      |row| row.get(0),
+    )
+    .map_err(|error| format!("Unable to lookup vault document: {error}"))?;
+
+  fs::read(&file_path).map_err(|error| format!("Unable to read vault file: {error}"))
+}
+
 pub fn load_documents(conn: &Connection) -> Result<Vec<VaultDocument>, String> {
   let mut docs_stmt = conn
     .prepare(

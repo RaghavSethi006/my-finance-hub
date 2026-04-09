@@ -6,6 +6,7 @@ use backend::{
   import_vault_document,
   initialize_app_state,
   load_app_state,
+  read_vault_document,
   replace_app_state,
 };
 use tauri::Manager;
@@ -30,6 +31,7 @@ pub fn run() {
       replace_app_state,
       import_vault_document,
       delete_vault_document,
+      read_vault_document,
       get_desktop_paths
     ])
     .run(tauri::generate_context!())

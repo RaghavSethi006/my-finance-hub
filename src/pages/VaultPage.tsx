@@ -1,4 +1,4 @@
-import { ChangeEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useFinOS } from "@/lib/store";
 import { VaultDocument } from "@/lib/types";
-import { deleteVaultDocument, importVaultDocument, isTauriDesktop } from "@/lib/desktop";
+import { deleteVaultDocument, importVaultDocument, isTauriDesktop, readVaultDocument } from "@/lib/desktop";
 import { FileText, Grid3X3, List, Lock, Search, Shield, Trash2, Unlock, Upload, Edit2, Download } from "lucide-react";
 import { toast } from "sonner";
 
@@ -37,6 +37,27 @@ function formatSize(size: number): string {
   return `${Math.max(1, Math.round(size / 1024))} KB`;
 }
 
+function getMimeType(fileType: string): string {
+  const normalized = fileType.toLowerCase();
+  if (normalized === "pdf") return "application/pdf";
+  if (normalized === "jpg" || normalized === "jpeg") return "image/jpeg";
+  if (normalized === "png") return "image/png";
+  if (normalized === "csv") return "text/csv";
+  if (normalized === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (normalized === "xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  return "application/octet-stream";
+}
+
+function isPreviewable(fileType: string): boolean {
+  return ["pdf", "jpg", "jpeg", "png"].includes(fileType.toLowerCase());
+}
+
+function buildDownloadName(document: VaultDocument): string {
+  const normalizedType = document.fileType.toLowerCase();
+  const hasExtension = document.name.toLowerCase().endsWith(`.${normalizedType}`);
+  return hasExtension ? document.name : `${document.name}.${normalizedType}`;
+}
+
 export default function VaultPage() {
   const { documents, isVaultLocked, toggleVaultLock, addDocument, updateDocument, deleteDocument } = useFinOS();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -46,8 +67,10 @@ export default function VaultPage() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [passwordInput, setPasswordInput] = useState("");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [documentForm, setDocumentForm] = useState({
@@ -203,6 +226,65 @@ export default function VaultPage() {
     } catch (error) {
       console.error(error);
       toast.error("Failed to delete document");
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedDocument || !detailOpen || !isTauriDesktop() || !isPreviewable(selectedDocument.fileType)) {
+      setPreviewUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return null;
+      });
+      setIsLoadingPreview(false);
+      return;
+    }
+
+    let isActive = true;
+    setIsLoadingPreview(true);
+
+    void readVaultDocument(selectedDocument.id)
+      .then((bytes) => {
+        if (!isActive) return;
+        const blob = new Blob([new Uint8Array(bytes)], { type: getMimeType(selectedDocument.fileType) });
+        const objectUrl = URL.createObjectURL(blob);
+        setPreviewUrl((current) => {
+          if (current) URL.revokeObjectURL(current);
+          return objectUrl;
+        });
+      })
+      .catch((error) => {
+        console.error(error);
+        if (isActive) {
+          toast.error("Failed to load document preview");
+        }
+      })
+      .finally(() => {
+        if (isActive) {
+          setIsLoadingPreview(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [detailOpen, selectedDocument]);
+
+  const handleDownloadDocument = async () => {
+    if (!selectedDocument || !isTauriDesktop()) return;
+
+    try {
+      const bytes = await readVaultDocument(selectedDocument.id);
+      const blob = new Blob([new Uint8Array(bytes)], { type: getMimeType(selectedDocument.fileType) });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = buildDownloadName(selectedDocument);
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success("Document downloaded");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to download document");
     }
   };
 
@@ -401,6 +483,28 @@ export default function VaultPage() {
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <Label className="text-xs">Preview</Label>
+                <div className="overflow-hidden rounded-lg border bg-secondary/20">
+                  {isLoadingPreview && (
+                    <div className="flex min-h-[220px] items-center justify-center text-sm text-muted-foreground">
+                      Loading preview...
+                    </div>
+                  )}
+                  {!isLoadingPreview && previewUrl && selectedDocument.fileType.toLowerCase() === "pdf" && (
+                    <iframe title={selectedDocument.name} src={previewUrl} className="h-[320px] w-full bg-white" />
+                  )}
+                  {!isLoadingPreview && previewUrl && ["jpg", "jpeg", "png"].includes(selectedDocument.fileType.toLowerCase()) && (
+                    <img src={previewUrl} alt={selectedDocument.name} className="max-h-[320px] w-full object-contain" />
+                  )}
+                  {!isLoadingPreview && !previewUrl && (
+                    <div className="flex min-h-[220px] items-center justify-center text-sm text-muted-foreground">
+                      Preview is available for PDF and image documents in the desktop app.
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div>
                 <Label className="text-xs">Document Name</Label>
                 <Input value={documentForm.name} onChange={(event) => setDocumentForm((current) => ({ ...current, name: event.target.value }))} />
@@ -425,8 +529,8 @@ export default function VaultPage() {
 
               <DialogFooter className="gap-2 sm:justify-between">
                 <div className="flex gap-2">
-                  <Button variant="outline" disabled className="gap-2">
-                    <Download className="h-4 w-4" /> Export Soon
+                  <Button variant="outline" onClick={handleDownloadDocument} disabled={!isTauriDesktop()} className="gap-2">
+                    <Download className="h-4 w-4" /> Download
                   </Button>
                   <Button variant="destructive" onClick={handleDeleteDocument} className="gap-2">
                     <Trash2 className="h-4 w-4" /> Delete

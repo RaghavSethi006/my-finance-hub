@@ -41,6 +41,12 @@ pub fn delete_vault_document(document_id: String, state: State<'_, AppState>) ->
 }
 
 #[tauri::command]
+pub fn read_vault_document(document_id: String, state: State<'_, AppState>) -> Result<Vec<u8>, String> {
+  let conn: Connection = open_connection(&state)?;
+  vault::read_vault_document(&conn, &document_id)
+}
+
+#[tauri::command]
 pub fn get_desktop_paths(state: State<'_, AppState>) -> Result<DesktopPaths, String> {
   Ok(DesktopPaths {
     data_dir: state.data_dir.to_string_lossy().to_string(),

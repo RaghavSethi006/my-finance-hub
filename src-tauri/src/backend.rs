@@ -13,6 +13,7 @@ pub use commands::{
   get_desktop_paths,
   import_vault_document,
   load_app_state,
+  read_vault_document,
   replace_app_state,
 };
 pub use storage::initialize_app_state;
