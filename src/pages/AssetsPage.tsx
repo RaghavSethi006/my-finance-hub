@@ -4,7 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useFinOS } from "@/lib/store";
 import { formatCurrency, formatPercent } from "@/lib/currency";
-import { portfolioHistory } from "@/lib/sample-data";
+import { buildPortfolioHistory } from "@/lib/analytics";
 import { TrendingUp, TrendingDown, Plus, Bitcoin, Building2, Gem, BarChart3, Landmark, Car, PieChart as PieIcon, LineChart as LineIcon, Wallet, CreditCard, GraduationCap, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis, CartesianGrid } from "recharts";
@@ -32,6 +32,7 @@ const loanIcons: Record<string, React.ReactNode> = {
 
 export default function AssetsPage() {
   const { assets, loans, settings } = useFinOS();
+  const portfolioHistory = buildPortfolioHistory(assets);
   const totalValue = useFinOS(s => s.totalPortfolioValue());
   const totalCost = useFinOS(s => s.totalPortfolioCost());
   const totalLoanOutstanding = useFinOS(s => s.totalLoanOutstanding());

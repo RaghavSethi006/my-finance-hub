@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { useFinOS } from "@/lib/store";
 import { formatCurrency, formatPercent } from "@/lib/currency";
-import { netWorthHistory } from "@/lib/sample-data";
+import { buildNetWorthHistory } from "@/lib/analytics";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 import { ArrowUp, ArrowDown, TrendingUp, BookOpen, Scale, FileText, ChevronDown, ChevronRight, Search, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,10 @@ import { Separator } from "@/components/ui/separator";
 
 export default function LedgerPage() {
   const { settings, transactions, categories, accounts, journalEntries, loans } = useFinOS();
+  const assets = useFinOS((state) => state.assets);
   const netWorth = useFinOS((s) => s.netWorth());
   const totalLoanOutstanding = useFinOS((s) => s.totalLoanOutstanding());
+  const netWorthHistory = buildNetWorthHistory(accounts, assets, loans, transactions);
 
   const [journalSearch, setJournalSearch] = useState('');
   const [expandedJE, setExpandedJE] = useState<Set<string>>(new Set());
@@ -66,7 +68,7 @@ export default function LedgerPage() {
   const liquidAssets = accounts.filter(a => a.type === 'bank' || a.type === 'cash').reduce((s, a) => s + Math.max(a.balance, 0), 0);
   const investmentAssets = accounts.filter(a => a.type === 'investment').reduce((s, a) => s + a.balance, 0);
   const portfolioValue = useFinOS(s => s.totalPortfolioValue());
-  const physicalAssets = useFinOS(s => s.assets).filter(a => a.type === 'real_estate' || a.type === 'vehicle' || a.type === 'gold').reduce((s, a) => s + a.currentPrice * a.quantity, 0);
+  const physicalAssets = assets.filter(a => a.type === 'real_estate' || a.type === 'vehicle' || a.type === 'gold').reduce((s, a) => s + a.currentPrice * a.quantity, 0);
   const totalAssets = liquidAssets + investmentAssets + portfolioValue + physicalAssets;
   const creditCardLiability = Math.abs(accounts.filter(a => a.type === 'credit_card').reduce((s, a) => s + Math.min(a.balance, 0), 0));
 

@@ -10,9 +10,22 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useState, useRef } from "react";
 import { toast } from "sonner";
+import { isTauriDesktop } from "@/lib/desktop";
 
 export default function SettingsPage() {
-  const { settings, updateSettings, exportAllData, importAllData, clearAllData, transactions, accounts, assets, loans, documents } = useFinOS();
+  const {
+    settings,
+    updateSettings,
+    exportAllData,
+    importAllData,
+    clearAllData,
+    clearTransactions,
+    transactions,
+    accounts,
+    assets,
+    loans,
+    documents,
+  } = useFinOS();
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resetText, setResetText] = useState('');
   const [clearTxConfirm, setClearTxConfirm] = useState(false);
@@ -92,17 +105,12 @@ export default function SettingsPage() {
   };
 
   const handleClearTransactions = () => {
-    useFinOS.setState({ transactions: [] });
+    clearTransactions();
     toast.success('All transactions cleared');
     setClearTxConfirm(false);
   };
 
-  const storageInfo = (() => {
-    try {
-      const data = localStorage.getItem('finos-store');
-      return data ? (data.length / 1024).toFixed(1) : '0';
-    } catch { return '0'; }
-  })();
+  const storageInfo = (new Blob([exportAllData()]).size / 1024).toFixed(1);
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -214,7 +222,9 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground mt-1">Import a previously exported JSON backup to restore all data.</p>
           </div>
 
-          <p className="text-xs text-muted-foreground">All data stored locally in your browser via localStorage</p>
+          <p className="text-xs text-muted-foreground">
+            {isTauriDesktop() ? 'All data is stored locally in the FinOS desktop database.' : 'All data is stored locally in your browser.'}
+          </p>
         </CardContent>
       </Card>
 
