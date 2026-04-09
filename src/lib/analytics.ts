@@ -1,4 +1,4 @@
-import type { Account, Asset, Loan, Transaction } from './types';
+import type { Account, Asset, Category, Loan, Transaction } from './types';
 
 export type DashboardRangePreset = 'this_week' | 'this_month' | 'this_year' | 'last_30_days' | 'all_time' | 'custom';
 
@@ -199,6 +199,114 @@ function buildBucketRange(range: ResolvedDateRange, transactions: Transaction[])
   return buckets;
 }
 
+type CategorySeriesMeta = {
+  id: string;
+  key: string;
+  label: string;
+  color: string;
+};
+
+export function buildExpenseCategorySeries(
+  transactions: Transaction[],
+  categories: Category[],
+  range: ResolvedDateRange,
+  maxCategories = 5
+) {
+  const expenseTransactions = transactions.filter((transaction) => transaction.type === 'expense');
+  const categoryTotals = expenseTransactions.reduce((accumulator, transaction) => {
+    accumulator.set(
+      transaction.categoryId,
+      (accumulator.get(transaction.categoryId) ?? 0) + transaction.amount
+    );
+    return accumulator;
+  }, new Map<string, number>());
+
+  const sortedCategoryIds = [...categoryTotals.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .map(([categoryId]) => categoryId);
+
+  const topCategoryIds = sortedCategoryIds.slice(0, maxCategories);
+  const categoryMeta: CategorySeriesMeta[] = topCategoryIds.map((categoryId, index) => {
+    const category = categories.find((item) => item.id === categoryId);
+    return {
+      id: categoryId,
+      key: categoryId,
+      label: category?.name ?? `Category ${index + 1}`,
+      color: category?.color ?? `hsl(${(index * 57) % 360} 70% 50%)`,
+    };
+  });
+
+  const hasOther = sortedCategoryIds.length > topCategoryIds.length;
+  if (hasOther) {
+    categoryMeta.push({
+      id: '__other__',
+      key: '__other__',
+      label: 'Other',
+      color: 'hsl(220 8% 50%)',
+    });
+  }
+
+  const buckets = buildBucketRange(range, expenseTransactions);
+  const amountSeries = buckets.map((bucket) => {
+    const bucketTransactions = expenseTransactions.filter((transaction) => {
+      const date = parseDate(transaction.date).getTime();
+      return date >= bucket.start.getTime() && date <= bucket.end.getTime();
+    });
+
+    const point: Record<string, number | string> = {
+      period: bucket.label,
+      total: bucketTransactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+    };
+
+    for (const meta of categoryMeta) {
+      point[meta.key] = 0;
+    }
+
+    for (const transaction of bucketTransactions) {
+      const targetKey = topCategoryIds.includes(transaction.categoryId) ? transaction.categoryId : '__other__';
+      if (point[targetKey] !== undefined) {
+        point[targetKey] = Number(point[targetKey]) + transaction.amount;
+      }
+    }
+
+    return point;
+  });
+
+  const shareSeries = amountSeries.map((point) => {
+    const total = Number(point.total) || 0;
+    const nextPoint: Record<string, number | string> = {
+      period: point.period,
+      total,
+    };
+
+    for (const meta of categoryMeta) {
+      nextPoint[meta.key] = total > 0 ? (Number(point[meta.key]) / total) * 100 : 0;
+    }
+
+    return nextPoint;
+  });
+
+  const distribution = categoryMeta
+    .map((meta) => ({
+      key: meta.key,
+      name: meta.label,
+      value: expenseTransactions
+        .filter((transaction) =>
+          meta.key === '__other__' ? !topCategoryIds.includes(transaction.categoryId) : transaction.categoryId === meta.id
+        )
+        .reduce((sum, transaction) => sum + transaction.amount, 0),
+      color: meta.color,
+    }))
+    .filter((entry) => entry.value > 0);
+
+  return {
+    categories: categoryMeta,
+    amountSeries,
+    shareSeries,
+    distribution,
+  };
+}
+
 export function buildIncomeExpenseSeries(transactions: Transaction[], range: ResolvedDateRange) {
   const buckets = buildBucketRange(range, transactions);
   return buckets.map((bucket) => {
@@ -217,22 +325,6 @@ export function buildIncomeExpenseSeries(transactions: Transaction[], range: Res
         .reduce((sum, transaction) => sum + transaction.amount, 0),
     };
   });
-}
-
-export function buildRolling30DayExpenseSeries(transactions: Transaction[], today = new Date()) {
-  const range: ResolvedDateRange = {
-    start: isoDate(addDays(startOfDay(today), -29)),
-    end: isoDate(startOfDay(today)),
-    label: 'Last 30 days',
-  };
-
-  return buildIncomeExpenseSeries(
-    transactions.filter((transaction) => transaction.type === 'expense'),
-    range
-  ).map((point) => ({
-    day: point.period,
-    spending: point.expenses,
-  }));
 }
 
 function monthKey(date: Date): string {

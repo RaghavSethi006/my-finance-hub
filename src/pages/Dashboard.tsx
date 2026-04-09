@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import { useFinOS } from "@/lib/store";
 import { formatCurrency, formatPercent } from "@/lib/currency";
 import {
+  buildExpenseCategorySeries,
   buildIncomeExpenseSeries,
-  buildRolling30DayExpenseSeries,
   DashboardRangePreset,
   DashboardRangeSelection,
   filterTransactionsByRange,
@@ -40,6 +40,7 @@ import {
   Cell,
   BarChart,
   Bar,
+  Legend,
 } from "recharts";
 
 function getGreeting() {
@@ -89,6 +90,7 @@ export default function Dashboard() {
   const [rangeSelection, setRangeSelection] = useState<DashboardRangeSelection>({
     preset: "this_month",
   });
+  const [spendingChartMode, setSpendingChartMode] = useState<"amount" | "share">("amount");
 
   const resolvedRange = useMemo(
     () => resolveDashboardRange(rangeSelection, transactions),
@@ -103,9 +105,9 @@ export default function Dashboard() {
     () => buildIncomeExpenseSeries(rangeTransactions, resolvedRange),
     [rangeTransactions, resolvedRange]
   );
-  const rolling30DaySpendingData = useMemo(
-    () => buildRolling30DayExpenseSeries(transactions),
-    [transactions]
+  const spendingCategoryData = useMemo(
+    () => buildExpenseCategorySeries(rangeTransactions, categories, resolvedRange),
+    [rangeTransactions, categories, resolvedRange]
   );
 
   const portfolioPL = portfolioValue - portfolioCost;
@@ -140,6 +142,7 @@ export default function Dashboard() {
   const recentTransactions = [...rangeTransactions]
     .sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime())
     .slice(0, 5);
+  const spendingDistributionTotal = spendingCategoryData.distribution.reduce((sum, entry) => sum + entry.value, 0);
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -300,7 +303,7 @@ export default function Dashboard() {
 
         <Card className="animate-fade-in" style={{ animationDelay: "300ms" }}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Asset Allocation</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Current Asset Allocation</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[180px]">
@@ -326,26 +329,50 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+            <p className="mt-3 text-xs text-muted-foreground">This chart reflects current holdings, not the selected dashboard time range.</p>
           </CardContent>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="animate-fade-in lg:col-span-2" style={{ animationDelay: "350ms" }}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Spending in the Last 30 Days</CardTitle>
+          <CardHeader className="space-y-3 pb-2">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Spending by Category ({resolvedRange.label})
+              </CardTitle>
+              <div className="flex gap-2">
+                <Button
+                  variant={spendingChartMode === "amount" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSpendingChartMode("amount")}
+                >
+                  Amount
+                </Button>
+                <Button
+                  variant={spendingChartMode === "share" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSpendingChartMode("share")}
+                >
+                  Share
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="h-[260px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={rolling30DaySpendingData}>
+                <BarChart data={spendingChartMode === "amount" ? spendingCategoryData.amountSeries : spendingCategoryData.shareSeries}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="day" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} minTickGap={20} />
+                  <XAxis dataKey="period" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} minTickGap={20} />
                   <YAxis
                     tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(value) => formatCurrency(value, settings.defaultCurrency)}
+                    tickFormatter={(value) =>
+                      spendingChartMode === "share" ? `${Number(value).toFixed(0)}%` : formatCurrency(value, settings.defaultCurrency)
+                    }
+                    domain={spendingChartMode === "share" ? [0, 100] : undefined}
                   />
                   <Tooltip
                     contentStyle={{
@@ -354,44 +381,88 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       fontSize: "12px",
                     }}
-                    formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), "Spending"]}
+                    formatter={(value: number, name: string) => [
+                      spendingChartMode === "share" ? `${value.toFixed(1)}%` : formatCurrency(value, settings.defaultCurrency),
+                      spendingCategoryData.categories.find((category) => category.key === name)?.label || name,
+                    ]}
                   />
-                  <Bar dataKey="spending" fill="hsl(220, 70%, 50%)" radius={[4, 4, 0, 0]} />
+                  <Legend />
+                  {spendingCategoryData.categories.map((category) => (
+                    <Bar
+                      key={category.key}
+                      dataKey={category.key}
+                      stackId="spending"
+                      fill={category.color}
+                      radius={
+                        category.key === spendingCategoryData.categories[spendingCategoryData.categories.length - 1]?.key
+                          ? [4, 4, 0, 0]
+                          : undefined
+                      }
+                      name={category.label}
+                    />
+                  ))}
                 </BarChart>
               </ResponsiveContainer>
             </div>
-            <p className="mt-3 text-xs text-muted-foreground">This is a true rolling 30-day view, including today, rather than a calendar-month slice.</p>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Toggle between absolute spend and each period&apos;s category share. This chart now follows the selected dashboard timeframe.
+            </p>
           </CardContent>
         </Card>
 
         <Card className="animate-fade-in" style={{ animationDelay: "400ms" }}>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Alerts & Insights</CardTitle>
-              {unreadAlerts.length > 0 && <Badge variant="secondary" className="text-xs">{unreadAlerts.length} new</Badge>}
-            </div>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Spending Distribution ({resolvedRange.label})
+            </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3">
-            {alerts.slice(0, 5).map((alert) => (
-              <div key={alert.id} className={`flex gap-3 rounded-lg p-2.5 ${!alert.read ? "bg-secondary/50" : ""}`}>
-                <div className="mt-0.5 shrink-0">
-                  {alert.severity === "warning" && <AlertTriangle className="h-4 w-4 text-warning-color" />}
-                  {alert.severity === "success" && <CheckCircle2 className="h-4 w-4 text-profit" />}
-                  {alert.severity === "info" && <Info className="h-4 w-4 text-primary" />}
-                  {alert.severity === "error" && <AlertTriangle className="h-4 w-4 text-loss" />}
+          <CardContent>
+            <div className="h-[180px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <RechartsPieChart>
+                  <Pie
+                    data={spendingCategoryData.distribution}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={50}
+                    outerRadius={80}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {spendingCategoryData.distribution.map((entry) => (
+                      <Cell key={entry.key} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), "Spending"]} />
+                </RechartsPieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-2 space-y-1.5">
+              {spendingCategoryData.distribution.length > 0 ? spendingCategoryData.distribution.map((item) => {
+                const share = spendingDistributionTotal > 0 ? (item.value / spendingDistributionTotal) * 100 : 0;
+                return (
+                  <div key={item.key} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                      <span className="text-muted-foreground">{item.name}</span>
+                    </div>
+                    <span className="font-mono font-medium">
+                      {share.toFixed(0)}% / {formatCurrency(item.value, settings.defaultCurrency)}
+                    </span>
+                  </div>
+                );
+              }) : (
+                <div className="flex h-[180px] items-center justify-center text-sm text-muted-foreground">
+                  No expense activity in this range yet.
                 </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{alert.title}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{alert.message}</p>
-                </div>
-              </div>
-            ))}
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="animate-fade-in lg:col-span-2" style={{ animationDelay: "500ms" }}>
+        <Card className="animate-fade-in lg:col-span-2" style={{ animationDelay: "450ms" }}>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">Recent Transactions ({resolvedRange.label})</CardTitle>
@@ -428,7 +499,32 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <div className="grid gap-4">
+        <Card className="animate-fade-in" style={{ animationDelay: "500ms" }}>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Alerts & Insights</CardTitle>
+              {unreadAlerts.length > 0 && <Badge variant="secondary" className="text-xs">{unreadAlerts.length} new</Badge>}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {alerts.slice(0, 5).map((alert) => (
+              <div key={alert.id} className={`flex gap-3 rounded-lg p-2.5 ${!alert.read ? "bg-secondary/50" : ""}`}>
+                <div className="mt-0.5 shrink-0">
+                  {alert.severity === "warning" && <AlertTriangle className="h-4 w-4 text-warning-color" />}
+                  {alert.severity === "success" && <CheckCircle2 className="h-4 w-4 text-profit" />}
+                  {alert.severity === "info" && <Info className="h-4 w-4 text-primary" />}
+                  {alert.severity === "error" && <AlertTriangle className="h-4 w-4 text-loss" />}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{alert.title}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{alert.message}</p>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <Card className="animate-fade-in" style={{ animationDelay: "600ms" }}>
             <CardContent className="pt-5">
               <div className="mb-3 flex items-center gap-2">
@@ -501,7 +597,6 @@ export default function Dashboard() {
               </div>
             </CardContent>
           </Card>
-        </div>
       </div>
     </div>
   );
