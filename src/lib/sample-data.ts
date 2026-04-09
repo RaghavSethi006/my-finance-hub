@@ -1,4 +1,4 @@
-import { Account, Transaction, Category, Budget, Asset, VaultDocument, Alert, Loan, JournalEntry } from './types';
+import { Account, Transaction, Category, Budget, Asset, VaultDocument, Alert, Loan, JournalEntry, RecurringTemplate } from './types';
 
 export const sampleAccounts: Account[] = [
   { id: 'acc-1', name: 'Main Checking', type: 'bank', balance: 12450.80, currency: 'USD', color: 'hsl(220 70% 50%)', icon: 'building-2', createdAt: '2024-01-01', bankName: 'Chase Bank', accountNumber: '****4521', ifscCode: 'CHASUS33', branchName: 'Downtown Manhattan', nominees: ['Jane Doe'], loginUrl: 'https://chase.com', notes: 'Primary checking account', isActive: true },
@@ -60,6 +60,13 @@ export const sampleBudgets: Budget[] = [
   { id: 'bud-5', categoryId: 'cat-7', amount: 250, currency: 'USD', spent: 150, alertThreshold: 80, period: 'monthly' },
 ];
 
+export const sampleRecurringTemplates: RecurringTemplate[] = [
+  { id: 'rt-1', amount: 7500, type: 'income', categoryId: 'cat-8', accountId: 'acc-1', note: 'Monthly salary', paymentMethod: 'netbanking', currency: 'USD', taxTag: 'personal', isDeductible: false, frequency: 'monthly', nextDate: d(-29), isPaused: false, createdAt: '2024-01-01', updatedAt: '2024-01-01' },
+  { id: 'rt-2', amount: 1800, type: 'expense', categoryId: 'cat-2', accountId: 'acc-1', note: 'Monthly rent', paymentMethod: 'netbanking', currency: 'USD', taxTag: 'personal', isDeductible: false, frequency: 'monthly', nextDate: d(-27), isPaused: false, createdAt: '2024-01-01', updatedAt: '2024-01-01' },
+  { id: 'rt-3', amount: 65, type: 'expense', categoryId: 'cat-4', accountId: 'acc-3', note: 'Netflix + Spotify', paymentMethod: 'card', currency: 'USD', taxTag: 'personal', isDeductible: false, frequency: 'monthly', nextDate: d(-12), isPaused: false, createdAt: '2024-02-01', updatedAt: '2024-02-01' },
+  { id: 'rt-4', amount: 42, type: 'expense', categoryId: 'cat-12', accountId: 'acc-3', note: 'GitHub Pro + Figma', paymentMethod: 'card', currency: 'USD', taxTag: 'business', isDeductible: true, frequency: 'monthly', nextDate: d(-10), isPaused: false, createdAt: '2024-03-01', updatedAt: '2024-03-01' },
+];
+
 export const sampleAssets: Asset[] = [
   { id: 'ast-1', name: 'Apple Inc.', type: 'stock', ticker: 'AAPL', exchange: 'NASDAQ', quantity: 15, buyPrice: 142.50, currentPrice: 178.72, currency: 'USD', purchaseDate: '2023-06-15' },
   { id: 'ast-2', name: 'Tesla Inc.', type: 'stock', ticker: 'TSLA', exchange: 'NASDAQ', quantity: 8, buyPrice: 185.00, currentPrice: 248.42, currency: 'USD', purchaseDate: '2023-09-20' },
@@ -104,8 +111,8 @@ export const sampleDocuments: VaultDocument[] = [
   { id: 'doc-3', name: 'Apartment Deed', category: 'legal', fileType: 'pdf', size: 3500000, tags: ['property', 'deed'], linkedEntityId: 'ast-5', linkedEntityType: 'asset', createdAt: '2021-08-15', updatedAt: '2021-08-15' },
   { id: 'doc-4', name: 'Health Insurance Policy', category: 'personal', fileType: 'pdf', size: 890000, tags: ['insurance', 'health'], createdAt: '2025-01-01', updatedAt: '2025-01-01' },
   { id: 'doc-5', name: 'W-2 Form 2024', category: 'tax', fileType: 'pdf', size: 156000, tags: ['w2', 'income'], createdAt: '2025-02-01', updatedAt: '2025-02-01' },
-  { id: 'doc-6', name: 'Car Loan Agreement', category: 'legal', fileType: 'pdf', size: 420000, tags: ['loan', 'auto'], linkedEntityId: 'loan-2', linkedEntityType: 'asset', createdAt: '2022-03-10', updatedAt: '2022-03-10' },
-  { id: 'doc-7', name: 'Mortgage Agreement', category: 'legal', fileType: 'pdf', size: 1850000, tags: ['mortgage', 'home'], linkedEntityId: 'loan-1', linkedEntityType: 'asset', createdAt: '2021-08-15', updatedAt: '2021-08-15' },
+  { id: 'doc-6', name: 'Car Loan Agreement', category: 'legal', fileType: 'pdf', size: 420000, tags: ['loan', 'auto'], linkedEntityId: 'ast-15', linkedEntityType: 'asset', createdAt: '2022-03-10', updatedAt: '2022-03-10' },
+  { id: 'doc-7', name: 'Mortgage Agreement', category: 'legal', fileType: 'pdf', size: 1850000, tags: ['mortgage', 'home'], linkedEntityId: 'ast-5', linkedEntityType: 'asset', createdAt: '2021-08-15', updatedAt: '2021-08-15' },
 ];
 
 export const sampleAlerts: Alert[] = [

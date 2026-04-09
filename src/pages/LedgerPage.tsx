@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { useFinOS } from "@/lib/store";
 import { formatCurrency, formatPercent } from "@/lib/currency";
-import { netWorthHistory } from "@/lib/sample-data";
+import { buildNetWorthHistory } from "@/lib/analytics";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 import { ArrowUp, ArrowDown, TrendingUp, BookOpen, Scale, FileText, ChevronDown, ChevronRight, Search, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,22 +12,70 @@ import { Input } from "@/components/ui/input";
 import { useState, useMemo } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
+
+function downloadFile(fileName: string, contents: string, mimeType: string) {
+  const blob = new Blob([contents], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function inSelectedPeriod(date: string, period: string) {
+  const target = new Date(`${date}T00:00:00`);
+  const now = new Date();
+  const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+  const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3;
+  const startOfQuarter = new Date(now.getFullYear(), quarterStartMonth, 1);
+  const startOfYear = new Date(now.getFullYear(), 0, 1);
+
+  if (period === "last-month") {
+    return target >= startOfLastMonth && target <= endOfLastMonth;
+  }
+
+  if (period === "this-quarter") {
+    return target >= startOfQuarter;
+  }
+
+  if (period === "this-year") {
+    return target >= startOfYear;
+  }
+
+  return target >= startOfThisMonth;
+}
 
 export default function LedgerPage() {
   const { settings, transactions, categories, accounts, journalEntries, loans } = useFinOS();
+  const assets = useFinOS((state) => state.assets);
   const netWorth = useFinOS((s) => s.netWorth());
   const totalLoanOutstanding = useFinOS((s) => s.totalLoanOutstanding());
+  const netWorthHistory = buildNetWorthHistory(accounts, assets, loans, transactions);
 
   const [journalSearch, setJournalSearch] = useState('');
   const [expandedJE, setExpandedJE] = useState<Set<string>>(new Set());
   const [period, setPeriod] = useState('this-month');
+  const [activeTab, setActiveTab] = useState('journal');
 
-  const totalIncome = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const totalExpenses = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  const scopedTransactions = useMemo(
+    () => transactions.filter((transaction) => inSelectedPeriod(transaction.date, period)),
+    [period, transactions]
+  );
+  const scopedJournalEntries = useMemo(
+    () => journalEntries.filter((entry) => inSelectedPeriod(entry.date, period)),
+    [journalEntries, period]
+  );
+
+  const totalIncome = scopedTransactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const totalExpenses = scopedTransactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
   const netProfit = totalIncome - totalExpenses;
   const savingsRate = totalIncome > 0 ? (netProfit / totalIncome) * 100 : 0;
 
-  const expenseByCategory = transactions
+  const expenseByCategory = scopedTransactions
     .filter(t => t.type === 'expense')
     .reduce((acc, t) => {
       const cat = categories.find(c => c.id === t.categoryId);
@@ -36,7 +84,7 @@ export default function LedgerPage() {
       return acc;
     }, {} as Record<string, number>);
 
-  const incomeByCategory = transactions
+  const incomeByCategory = scopedTransactions
     .filter(t => t.type === 'income')
     .reduce((acc, t) => {
       const cat = categories.find(c => c.id === t.categoryId);
@@ -48,7 +96,7 @@ export default function LedgerPage() {
   // Trial balance
   const trialBalance = useMemo(() => {
     const balances: Record<string, { accountType: string; debit: number; credit: number }> = {};
-    journalEntries.forEach(je => {
+    scopedJournalEntries.forEach(je => {
       je.entries.forEach(e => {
         if (!balances[e.accountName]) balances[e.accountName] = { accountType: e.accountType, debit: 0, credit: 0 };
         balances[e.accountName].debit += e.debit;
@@ -56,7 +104,7 @@ export default function LedgerPage() {
       });
     });
     return Object.entries(balances).map(([name, data]) => ({ name, ...data, net: data.debit - data.credit }));
-  }, [journalEntries]);
+  }, [scopedJournalEntries]);
 
   const totalDebits = trialBalance.reduce((s, t) => s + t.debit, 0);
   const totalCredits = trialBalance.reduce((s, t) => s + t.credit, 0);
@@ -66,11 +114,11 @@ export default function LedgerPage() {
   const liquidAssets = accounts.filter(a => a.type === 'bank' || a.type === 'cash').reduce((s, a) => s + Math.max(a.balance, 0), 0);
   const investmentAssets = accounts.filter(a => a.type === 'investment').reduce((s, a) => s + a.balance, 0);
   const portfolioValue = useFinOS(s => s.totalPortfolioValue());
-  const physicalAssets = useFinOS(s => s.assets).filter(a => a.type === 'real_estate' || a.type === 'vehicle' || a.type === 'gold').reduce((s, a) => s + a.currentPrice * a.quantity, 0);
+  const physicalAssets = assets.filter(a => a.type === 'real_estate' || a.type === 'vehicle' || a.type === 'gold').reduce((s, a) => s + a.currentPrice * a.quantity, 0);
   const totalAssets = liquidAssets + investmentAssets + portfolioValue + physicalAssets;
   const creditCardLiability = Math.abs(accounts.filter(a => a.type === 'credit_card').reduce((s, a) => s + Math.min(a.balance, 0), 0));
 
-  const filteredJournals = journalEntries.filter(je =>
+  const filteredJournals = scopedJournalEntries.filter(je =>
     je.description.toLowerCase().includes(journalSearch.toLowerCase())
   ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
@@ -86,6 +134,78 @@ export default function LedgerPage() {
   const expenseChartData = Object.entries(expenseByCategory)
     .sort(([, a], [, b]) => b - a)
     .map(([name, amount]) => ({ name: name.length > 12 ? name.slice(0, 12) + '…' : name, amount }));
+
+  const handleExport = () => {
+    const stamp = new Date().toISOString().split("T")[0];
+
+    if (activeTab === "journal") {
+      const normalizedRows = filteredJournals.flatMap((entry) =>
+        entry.entries.map((line) =>
+          `${entry.id},${entry.date},"${entry.description.replace(/"/g, '""')}","${line.accountName.replace(/"/g, '""')}",${line.accountType},${line.debit},${line.credit}`
+        )
+      );
+      downloadFile(
+        `finos-ledger-journal-${period}-${stamp}.csv`,
+        `Journal ID,Date,Description,Account,Type,Debit,Credit\n${normalizedRows.join("\n")}`,
+        "text/csv;charset=utf-8"
+      );
+      toast.success("Journal exported");
+      return;
+    }
+
+    if (activeTab === "trial-balance") {
+      const csv = [
+        "Account,Type,Debit,Credit,Net",
+        ...trialBalance.map((row) => `${row.name},${row.accountType},${row.debit},${row.credit},${row.net}`),
+      ].join("\n");
+      downloadFile(`finos-trial-balance-${period}-${stamp}.csv`, csv, "text/csv;charset=utf-8");
+      toast.success("Trial balance exported");
+      return;
+    }
+
+    if (activeTab === "income-statement") {
+      const summary = [
+        `Income Statement (${period})`,
+        `Total income: ${formatCurrency(totalIncome, settings.defaultCurrency)}`,
+        `Total expenses: ${formatCurrency(totalExpenses, settings.defaultCurrency)}`,
+        `Net profit: ${formatCurrency(netProfit, settings.defaultCurrency)}`,
+        `Savings rate: ${savingsRate.toFixed(1)}%`,
+        "",
+        "Income by source:",
+        ...Object.entries(incomeByCategory).map(([name, amount]) => `- ${name}: ${formatCurrency(amount, settings.defaultCurrency)}`),
+        "",
+        "Expenses by category:",
+        ...Object.entries(expenseByCategory).map(([name, amount]) => `- ${name}: ${formatCurrency(amount, settings.defaultCurrency)}`),
+      ].join("\n");
+      downloadFile(`finos-income-statement-${period}-${stamp}.txt`, summary, "text/plain;charset=utf-8");
+      toast.success("Income statement exported");
+      return;
+    }
+
+    if (activeTab === "balance-sheet") {
+      const summary = [
+        `Balance Sheet (${period})`,
+        `Liquid assets: ${formatCurrency(liquidAssets, settings.defaultCurrency)}`,
+        `Investment accounts: ${formatCurrency(investmentAssets, settings.defaultCurrency)}`,
+        `Portfolio value: ${formatCurrency(portfolioValue, settings.defaultCurrency)}`,
+        `Physical assets: ${formatCurrency(physicalAssets, settings.defaultCurrency)}`,
+        `Total assets: ${formatCurrency(totalAssets, settings.defaultCurrency)}`,
+        `Credit card liability: ${formatCurrency(creditCardLiability, settings.defaultCurrency)}`,
+        `Loans outstanding: ${formatCurrency(totalLoanOutstanding, settings.defaultCurrency)}`,
+        `Net worth: ${formatCurrency(netWorth, settings.defaultCurrency)}`,
+      ].join("\n");
+      downloadFile(`finos-balance-sheet-${period}-${stamp}.txt`, summary, "text/plain;charset=utf-8");
+      toast.success("Balance sheet exported");
+      return;
+    }
+
+    const csv = [
+      "Month,Assets,Liabilities,Net Worth",
+      ...netWorthHistory.map((point) => `${point.month},${point.assets},${point.liabilities},${point.netWorth}`),
+    ].join("\n");
+    downloadFile(`finos-net-worth-${stamp}.csv`, csv, "text/csv;charset=utf-8");
+    toast.success("Net worth history exported");
+  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -104,11 +224,11 @@ export default function LedgerPage() {
               <SelectItem value="this-year">This Year</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" className="gap-2"><Download className="h-3.5 w-3.5" /> Export</Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={handleExport}><Download className="h-3.5 w-3.5" /> Export</Button>
         </div>
       </div>
 
-      <Tabs defaultValue="journal">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-flex">
           <TabsTrigger value="journal" className="gap-1.5"><BookOpen className="h-3.5 w-3.5 hidden sm:block" /> Journal</TabsTrigger>
           <TabsTrigger value="trial-balance" className="gap-1.5"><Scale className="h-3.5 w-3.5 hidden sm:block" /> Trial Balance</TabsTrigger>

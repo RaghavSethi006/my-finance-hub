@@ -3,13 +3,13 @@ export type Currency = 'USD' | 'CAD' | 'INR' | 'GBP' | 'EUR' | 'JPY' | 'CNY' | '
 export const CURRENCY_CONFIG: Record<Currency, { symbol: string; name: string; locale: string }> = {
   USD: { symbol: '$', name: 'US Dollar', locale: 'en-US' },
   CAD: { symbol: 'C$', name: 'Canadian Dollar', locale: 'en-CA' },
-  INR: { symbol: '₹', name: 'Indian Rupee', locale: 'en-IN' },
-  GBP: { symbol: '£', name: 'British Pound', locale: 'en-GB' },
-  EUR: { symbol: '€', name: 'Euro', locale: 'de-DE' },
-  JPY: { symbol: '¥', name: 'Japanese Yen', locale: 'ja-JP' },
-  CNY: { symbol: '¥', name: 'Chinese Yuan', locale: 'zh-CN' },
-  AED: { symbol: 'د.إ', name: 'UAE Dirham', locale: 'ar-AE' },
-  KWD: { symbol: 'د.ك', name: 'Kuwaiti Dinar', locale: 'ar-KW' },
+  INR: { symbol: '\u20B9', name: 'Indian Rupee', locale: 'en-IN' },
+  GBP: { symbol: '\u00A3', name: 'British Pound', locale: 'en-GB' },
+  EUR: { symbol: '\u20AC', name: 'Euro', locale: 'de-DE' },
+  JPY: { symbol: '\u00A5', name: 'Japanese Yen', locale: 'ja-JP' },
+  CNY: { symbol: '\u00A5', name: 'Chinese Yuan', locale: 'zh-CN' },
+  AED: { symbol: '\u062F.\u0625', name: 'UAE Dirham', locale: 'ar-AE' },
+  KWD: { symbol: '\u062F.\u0643', name: 'Kuwaiti Dinar', locale: 'ar-KW' },
 };
 
 export type AccountType = 'cash' | 'bank' | 'credit_card' | 'investment' | 'crypto';
@@ -19,6 +19,7 @@ export type AssetType = 'stock' | 'mutual_fund' | 'crypto' | 'real_estate' | 've
 export type DocumentCategory = 'banking' | 'tax' | 'legal' | 'personal' | 'other';
 export type TaxTag = 'business' | 'personal' | 'untagged';
 export type LoanStatus = 'active' | 'paid_off' | 'defaulted';
+export type RecurringFrequency = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 export interface Account {
   id: string;
@@ -29,9 +30,8 @@ export interface Account {
   color: string;
   icon: string;
   createdAt: string;
-  // Extended details
   bankName?: string;
-  accountNumber?: string;  // masked, e.g. ****1234
+  accountNumber?: string;
   ifscCode?: string;
   branchName?: string;
   nominees?: string[];
@@ -76,6 +76,25 @@ export interface Budget {
   period: 'monthly';
 }
 
+export interface RecurringTemplate {
+  id: string;
+  amount: number;
+  type: TransactionType;
+  categoryId: string;
+  accountId: string;
+  toAccountId?: string;
+  note: string;
+  paymentMethod: PaymentMethod;
+  currency: Currency;
+  taxTag: TaxTag;
+  isDeductible: boolean;
+  frequency: RecurringFrequency;
+  nextDate: string;
+  isPaused: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Asset {
   id: string;
   name: string;
@@ -110,16 +129,18 @@ export interface Loan {
   linkedAccountId?: string;
 }
 
+export interface JournalEntryLine {
+  accountName: string;
+  accountType: 'asset' | 'liability' | 'income' | 'expense' | 'equity';
+  debit: number;
+  credit: number;
+}
+
 export interface JournalEntry {
   id: string;
   date: string;
   description: string;
-  entries: {
-    accountName: string;
-    accountType: 'asset' | 'liability' | 'income' | 'expense' | 'equity';
-    debit: number;
-    credit: number;
-  }[];
+  entries: JournalEntryLine[];
   transactionId?: string;
 }
 
@@ -129,6 +150,7 @@ export interface VaultDocument {
   category: DocumentCategory;
   fileType: string;
   size: number;
+  filePath?: string;
   tags: string[];
   linkedEntityId?: string;
   linkedEntityType?: 'transaction' | 'account' | 'asset';
@@ -154,4 +176,36 @@ export interface UserSettings {
   defaultCurrency: Currency;
   theme: 'light' | 'dark' | 'system';
   dateFormat: string;
+}
+
+export interface DesktopSnapshot {
+  settings: UserSettings;
+  accounts: Account[];
+  transactions: Transaction[];
+  recurringTemplates: RecurringTemplate[];
+  categories: Category[];
+  budgets: Budget[];
+  assets: Asset[];
+  loans: Loan[];
+  journalEntries: JournalEntry[];
+  documents: VaultDocument[];
+  alerts: Alert[];
+}
+
+export interface DesktopPaths {
+  dataDir: string;
+  dbPath: string;
+  vaultDir: string;
+}
+
+export interface DesktopSecurityStatus {
+  hasAppPin: boolean;
+  hasVaultPassword: boolean;
+  isAppLocked: boolean;
+  isVaultLocked: boolean;
+  autoLockTimeoutSeconds: number;
+  appCooldownRemainingSeconds: number;
+  vaultCooldownRemainingSeconds: number;
+  appFailedAttempts: number;
+  vaultFailedAttempts: number;
 }
