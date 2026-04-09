@@ -1,4 +1,4 @@
-import type { DesktopSnapshot, VaultDocument } from './types';
+import type { DesktopPaths, DesktopSnapshot, VaultDocument } from './types';
 
 declare global {
   interface Window {
@@ -21,6 +21,10 @@ export async function loadDesktopState(): Promise<DesktopSnapshot> {
 
 export async function replaceDesktopState(snapshot: DesktopSnapshot): Promise<void> {
   await invokeDesktop('replace_app_state', { snapshot });
+}
+
+export async function getDesktopPaths(): Promise<DesktopPaths> {
+  return invokeDesktop<DesktopPaths>('get_desktop_paths');
 }
 
 export type ImportVaultDocumentRequest = {

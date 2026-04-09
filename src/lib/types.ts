@@ -191,3 +191,9 @@ export interface DesktopSnapshot {
   documents: VaultDocument[];
   alerts: Alert[];
 }
+
+export interface DesktopPaths {
+  dataDir: string;
+  dbPath: string;
+  vaultDir: string;
+}

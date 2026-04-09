@@ -8,9 +8,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Settings as SettingsIcon, User, Shield, Database, AlertTriangle, Download, Upload, FileArchive, Check } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { isTauriDesktop } from "@/lib/desktop";
+import { getDesktopPaths, isTauriDesktop } from "@/lib/desktop";
+import type { DesktopPaths } from "@/lib/types";
 
 export default function SettingsPage() {
   const {
@@ -29,7 +30,20 @@ export default function SettingsPage() {
   const [resetConfirm, setResetConfirm] = useState(false);
   const [resetText, setResetText] = useState('');
   const [clearTxConfirm, setClearTxConfirm] = useState(false);
+  const [desktopPaths, setDesktopPaths] = useState<DesktopPaths | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isTauriDesktop()) {
+      return;
+    }
+
+    void getDesktopPaths()
+      .then(setDesktopPaths)
+      .catch((error) => {
+        console.error('Unable to load desktop paths', error);
+      });
+  }, []);
 
   const handleExportJSON = () => {
     const json = exportAllData();
@@ -222,8 +236,31 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground mt-1">Import a previously exported JSON backup to restore all data.</p>
           </div>
 
+          {desktopPaths && (
+            <>
+              <Separator />
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Desktop Storage Paths</p>
+                <div className="rounded-lg bg-secondary/50 p-3 text-xs text-muted-foreground space-y-2">
+                  <div>
+                    <span className="font-medium text-foreground">Data folder</span>
+                    <p className="break-all">{desktopPaths.dataDir}</p>
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">Database</span>
+                    <p className="break-all">{desktopPaths.dbPath}</p>
+                  </div>
+                  <div>
+                    <span className="font-medium text-foreground">Vault</span>
+                    <p className="break-all">{desktopPaths.vaultDir}</p>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
           <p className="text-xs text-muted-foreground">
-            {isTauriDesktop() ? 'All data is stored locally in the FinOS desktop database.' : 'All data is stored locally in your browser.'}
+            {isTauriDesktop() ? 'All desktop data is stored locally in the app folder data directory.' : 'All data is stored locally in your browser.'}
           </p>
         </CardContent>
       </Card>
