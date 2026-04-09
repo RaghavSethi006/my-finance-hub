@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppLayout } from "@/components/AppLayout";
 import { CommandPalette } from "@/components/CommandPalette";
+import { OnboardingFlow } from "@/components/OnboardingFlow";
 import Dashboard from "./pages/Dashboard";
 import FinancePage from "./pages/FinancePage";
 import LedgerPage from "./pages/LedgerPage";
@@ -43,6 +44,7 @@ function AppBootstrap() {
   const hydrateDesktop = useFinOS((state) => state.hydrateDesktop);
   const isHydrated = useFinOS((state) => state.isHydrated);
   const isSecurityReady = useFinOS((state) => state.isSecurityReady);
+  const onboardingCompleted = useFinOS((state) => state.onboardingCompleted);
   const refreshSecurityStatus = useFinOS((state) => state.refreshSecurityStatus);
   const recordSecurityActivity = useFinOS((state) => state.recordSecurityActivity);
 
@@ -102,7 +104,7 @@ function AppBootstrap() {
 
   return (
     <Router>
-      <CommandPalette />
+      {onboardingCompleted && <CommandPalette />}
       <AppLayout>
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -115,6 +117,7 @@ function AppBootstrap() {
           <Route path="*" element={<NotFound />} />
         </Routes>
       </AppLayout>
+      <OnboardingFlow />
       <DesktopLockScreen />
     </Router>
   );

@@ -7,6 +7,7 @@ import type {
   Asset,
   Budget,
   Category,
+  Currency,
   DesktopSecurityStatus,
   DesktopSnapshot,
   JournalEntry,
@@ -65,6 +66,7 @@ interface FinOSState extends SerializableFinOSState {
   isHydrated: boolean;
   isSecurityReady: boolean;
   securityStatus: DesktopSecurityStatus;
+  onboardingCompleted: boolean;
 
   totalBalance: () => number;
   netWorth: () => number;
@@ -84,6 +86,7 @@ interface FinOSState extends SerializableFinOSState {
   lockVault: () => Promise<void>;
   setVaultPassword: (currentPassword: string | undefined, newPassword: string) => Promise<void>;
   setAutoLockTimeout: (timeoutSeconds: number) => Promise<void>;
+  completeOnboarding: (options: { name: string; defaultCurrency: Currency; starterMode: 'sample' | 'clean' }) => void;
   updateSettings: (s: Partial<UserSettings>) => void;
   markAlertRead: (id: string) => void;
   addRecurringTemplate: (template: RecurringTemplate) => void;
@@ -366,6 +369,40 @@ function hasDesktopData(snapshot: DesktopSnapshot): boolean {
   );
 }
 
+function buildOnboardingState(
+  state: SerializableFinOSState,
+  options: { name: string; defaultCurrency: Currency; starterMode: 'sample' | 'clean' }
+): SerializableFinOSState {
+  const trimmedName = options.name.trim() || defaultSettings.name;
+  const settings = {
+    ...state.settings,
+    name: trimmedName,
+    defaultCurrency: options.defaultCurrency,
+  };
+
+  if (options.starterMode === 'sample') {
+    return {
+      ...state,
+      settings,
+    };
+  }
+
+  return {
+    ...state,
+    settings,
+    accounts: [],
+    transactions: [],
+    recurringTemplates: [],
+    budgets: [],
+    assets: [],
+    loans: [],
+    journalEntries: [],
+    documents: [],
+    alerts: [],
+    categories: state.categories.length > 0 ? state.categories : cloneData(sampleCategories),
+  };
+}
+
 function serializeMutationDetails(value?: string | Record<string, unknown>): string | undefined {
   if (typeof value === 'undefined') {
     return undefined;
@@ -424,6 +461,7 @@ export const useFinOS = create<FinOSState>()(
         isHydrated: false,
         isSecurityReady: false,
         securityStatus: defaultSecurityStatus,
+        onboardingCompleted: false,
 
         totalBalance: () => get().accounts.reduce((sum, account) => sum + account.balance, 0),
         netWorth: () => {
@@ -484,6 +522,7 @@ export const useFinOS = create<FinOSState>()(
                 isHydrating: false,
                 isSecurityReady: true,
                 securityStatus,
+                onboardingCompleted: true,
               });
               if (processed.generatedCount > 0) {
                 emitDesktopLog('info', 'recurring.processed', { generatedCount: processed.generatedCount });
@@ -601,6 +640,14 @@ export const useFinOS = create<FinOSState>()(
 
           const securityStatus = await saveAutoLockTimeout(timeoutSeconds);
           set({ securityStatus });
+        },
+
+        completeOnboarding: (options) => {
+          set((state) => ({
+            ...buildOnboardingState(snapshotFromState(state), options),
+            onboardingCompleted: true,
+          }));
+          syncToDesktop('onboarding.complete', options);
         },
 
         updateSettings: (settings) => {
@@ -884,6 +931,7 @@ export const useFinOS = create<FinOSState>()(
         journalEntries: state.journalEntries,
         documents: state.documents,
         alerts: state.alerts,
+        onboardingCompleted: state.onboardingCompleted,
       }),
     }
   )
