@@ -69,7 +69,7 @@ export default function FinancePage() {
 
   // Transaction form state
   const [txForm, setTxForm] = useState({
-    amount: '', type: 'expense' as TransactionType, categoryId: '', accountId: '',
+    amount: '', type: 'expense' as TransactionType, categoryId: '', accountId: '', toAccountId: '',
     date: new Date().toISOString().split('T')[0], note: '', paymentMethod: 'card' as PaymentMethod,
     currency: settings.defaultCurrency as Currency, taxTag: 'untagged' as TaxTag, isDeductible: false, isRecurring: false,
   });
@@ -92,7 +92,7 @@ export default function FinancePage() {
     if (search) txs = txs.filter(t => t.note.toLowerCase().includes(search.toLowerCase()));
     if (filterType !== 'all') txs = txs.filter(t => t.type === filterType);
     if (filterCategory !== 'all') txs = txs.filter(t => t.categoryId === filterCategory);
-    if (filterAccount !== 'all') txs = txs.filter(t => t.accountId === filterAccount);
+    if (filterAccount !== 'all') txs = txs.filter(t => t.accountId === filterAccount || t.toAccountId === filterAccount);
     if (filterDateFrom) txs = txs.filter(t => t.date >= filterDateFrom);
     if (filterDateTo) txs = txs.filter(t => t.date <= filterDateTo);
     return txs;
@@ -109,7 +109,7 @@ export default function FinancePage() {
     setEditingTx(null);
     setTxForm({
       amount: '', type: 'expense', categoryId: categories.find(c => c.type === 'expense')?.id || '',
-      accountId: accounts[0]?.id || '', date: new Date().toISOString().split('T')[0], note: '',
+      accountId: accounts[0]?.id || '', toAccountId: accounts[1]?.id || '', date: new Date().toISOString().split('T')[0], note: '',
       paymentMethod: 'card', currency: settings.defaultCurrency, taxTag: 'untagged', isDeductible: false, isRecurring: false,
     });
     setTxModalOpen(true);
@@ -117,7 +117,7 @@ export default function FinancePage() {
   const openEditTx = (tx: Transaction) => {
     setEditingTx(tx);
     setTxForm({
-      amount: tx.amount.toString(), type: tx.type, categoryId: tx.categoryId, accountId: tx.accountId,
+      amount: tx.amount.toString(), type: tx.type, categoryId: tx.categoryId, accountId: tx.accountId, toAccountId: tx.toAccountId || '',
       date: tx.date, note: tx.note, paymentMethod: tx.paymentMethod, currency: tx.currency,
       taxTag: tx.taxTag, isDeductible: tx.isDeductible, isRecurring: tx.isRecurring,
     });
@@ -126,6 +126,11 @@ export default function FinancePage() {
   const saveTx = () => {
     const amount = parseFloat(txForm.amount);
     if (!amount || amount <= 0 || !txForm.note.trim()) { toast.error('Please fill all required fields'); return; }
+    if (!txForm.accountId) { toast.error('Select an account'); return; }
+    if (txForm.type === 'transfer') {
+      if (!txForm.toAccountId) { toast.error('Select a destination account'); return; }
+      if (txForm.toAccountId === txForm.accountId) { toast.error('Transfer accounts must be different'); return; }
+    }
     if (editingTx) {
       updateTransaction(editingTx.id, { ...txForm, amount });
       toast.success('Transaction updated');
@@ -345,24 +350,32 @@ export default function FinancePage() {
                     {txs.map((tx) => {
                       const cat = categories.find(c => c.id === tx.categoryId);
                       const acc = accounts.find(a => a.id === tx.accountId);
+                      const destinationAccount = tx.toAccountId ? accounts.find(a => a.id === tx.toAccountId) : null;
                       const isIncome = tx.type === 'income';
+                      const isTransfer = tx.type === 'transfer';
                       return (
                         <div key={tx.id} className="flex items-center justify-between px-4 py-3 hover:bg-secondary/30 transition-colors group">
                           <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 ${isIncome ? 'bg-profit-muted' : 'bg-secondary'}`}>
-                              {isIncome ? <ArrowUpRight className="h-4 w-4 text-profit" /> : <ArrowDownRight className="h-4 w-4 text-muted-foreground" />}
+                              {isTransfer ? <ArrowUpRight className="h-4 w-4 rotate-45 text-muted-foreground" /> : isIncome ? <ArrowUpRight className="h-4 w-4 text-profit" /> : <ArrowDownRight className="h-4 w-4 text-muted-foreground" />}
                             </div>
                             <div className="min-w-0">
                               <p className="text-sm font-medium truncate">{tx.note}</p>
-                              <p className="text-xs text-muted-foreground">
+                              {isTransfer ? (
+                                <p className="text-xs text-muted-foreground">
+                                  {`Transfer ${acc?.name ?? 'Unknown'} -> ${destinationAccount?.name ?? 'Unknown'}`}
+                                </p>
+                              ) : (
+                                <p className="text-xs text-muted-foreground">
                                 {cat?.name} · {acc?.name} · {tx.paymentMethod} · {tx.currency}
-                              </p>
+                                </p>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="text-right">
                               <span className={`text-sm font-mono font-semibold ${isIncome ? 'text-profit' : ''}`}>
-                                {isIncome ? '+' : '-'}{formatCurrency(tx.amount, tx.currency)}
+                                {isTransfer ? formatCurrency(tx.amount, tx.currency) : `${isIncome ? '+' : '-'}${formatCurrency(tx.amount, tx.currency)}`}
                               </span>
                               <div className="flex gap-1 mt-0.5 justify-end">
                                 {tx.isRecurring && <Badge variant="secondary" className="text-[10px]">Recurring</Badge>}
@@ -398,7 +411,7 @@ export default function FinancePage() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {accounts.map(acc => {
-              const accTxCount = transactions.filter(t => t.accountId === acc.id).length;
+              const accTxCount = transactions.filter(t => t.accountId === acc.id || t.toAccountId === acc.id).length;
               const showNum = showAccountNumbers[acc.id];
               return (
                 <Card key={acc.id} className="hover:shadow-md transition-shadow cursor-pointer group" onClick={() => { setSelectedAccount(acc); setAccDetailOpen(true); }}>
@@ -523,7 +536,8 @@ export default function FinancePage() {
                   onClick={() => {
                     setTxForm(f => ({
                       ...f, type: t,
-                      categoryId: categories.find(c => c.type === (t === 'income' ? 'income' : 'expense'))?.id || f.categoryId
+                      categoryId: categories.find(c => c.type === (t === 'income' ? 'income' : 'expense'))?.id || f.categoryId,
+                      toAccountId: t === 'transfer' ? (f.toAccountId || accounts.find(a => a.id !== f.accountId)?.id || '') : '',
                     }));
                   }}>{t}</Button>
               ))}
@@ -547,17 +561,33 @@ export default function FinancePage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs">Category</Label>
-                <Select value={txForm.categoryId} onValueChange={v => setTxForm(f => ({ ...f, categoryId: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{filteredCategories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
-                </Select>
+                <Label className="text-xs">{txForm.type === 'transfer' ? 'From Account' : 'Category'}</Label>
+                {txForm.type === 'transfer' ? (
+                  <Select value={txForm.accountId} onValueChange={v => setTxForm(f => ({
+                    ...f,
+                    accountId: v,
+                    toAccountId: f.toAccountId === v ? accounts.find(a => a.id !== v)?.id || '' : f.toAccountId,
+                  }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{accounts.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                ) : (
+                  <Select value={txForm.categoryId} onValueChange={v => setTxForm(f => ({ ...f, categoryId: v }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>{filteredCategories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                )}
               </div>
               <div>
-                <Label className="text-xs">Account</Label>
-                <Select value={txForm.accountId} onValueChange={v => setTxForm(f => ({ ...f, accountId: v }))}>
+                <Label className="text-xs">{txForm.type === 'transfer' ? 'To Account' : 'Account'}</Label>
+                <Select value={txForm.type === 'transfer' ? txForm.toAccountId : txForm.accountId} onValueChange={v => setTxForm(f => ({
+                  ...f,
+                  [txForm.type === 'transfer' ? 'toAccountId' : 'accountId']: v,
+                }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{accounts.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent>
+                  <SelectContent>
+                    {(txForm.type === 'transfer' ? accounts.filter(a => a.id !== txForm.accountId) : accounts).map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                  </SelectContent>
                 </Select>
               </div>
             </div>
