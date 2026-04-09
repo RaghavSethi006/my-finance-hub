@@ -11,9 +11,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CURRENCY_CONFIG, Currency, TransactionType, PaymentMethod, TaxTag, AccountType, Account, Transaction, Budget, RecurringFrequency, RecurringTemplate, Category, VaultDocument } from "@/lib/types";
 import { toast } from "sonner";
+import { useSearchParams } from "react-router-dom";
 
 const ACCOUNT_TYPE_ICONS: Record<string, React.ReactNode> = {
   cash: <Wallet className="h-4 w-4" />,
@@ -44,6 +45,7 @@ function advanceRecurringDate(date: string, frequency: RecurringFrequency): stri
 }
 
 export default function FinancePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const {
     transactions,
     accounts,
@@ -204,6 +206,7 @@ export default function FinancePage() {
     });
     setTxModalOpen(true);
   };
+
   const buildRecurringTemplate = (templateId: string, createdAt: string): RecurringTemplate => ({
     id: templateId,
     amount: parseFloat(txForm.amount),
@@ -278,6 +281,27 @@ export default function FinancePage() {
     setAccForm({ name: '', type: 'bank', balance: '', currency: settings.defaultCurrency, bankName: '', accountNumber: '', ifscCode: '', branchName: '', nominees: '', loginUrl: '', notes: '' });
     setAccModalOpen(true);
   };
+
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (!action) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('action');
+    setSearchParams(nextParams, { replace: true });
+
+    if (action === 'add-transaction') {
+      openAddTx();
+      return;
+    }
+
+    if (action === 'add-account') {
+      openAddAcc();
+    }
+  }, [openAddTx, openAddAcc, searchParams, setSearchParams]);
+
   const openEditAcc = (acc: Account) => {
     setEditingAcc(acc);
     setAccForm({

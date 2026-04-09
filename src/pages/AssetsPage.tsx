@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
+import { useSearchParams } from "react-router-dom";
 
 const ASSET_COLORS = [
   "hsl(220, 70%, 50%)",
@@ -98,6 +99,7 @@ function generateId(prefix: string) {
 }
 
 export default function AssetsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { assets, loans, documents, settings, addAsset, updateAsset, deleteAsset } = useFinOS();
   const portfolioHistory = buildPortfolioHistory(assets);
   const totalValue = useFinOS((state) => state.totalPortfolioValue());
@@ -111,6 +113,7 @@ export default function AssetsPage() {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [deleteAssetId, setDeleteAssetId] = useState<string | null>(null);
   const [assetForm, setAssetForm] = useState(initialAssetForm);
+  const [activeTab, setActiveTab] = useState<string>(() => searchParams.get("tab") || "overview");
 
   const totalPL = totalValue - totalCost;
   const plPercent = totalCost > 0 ? (totalPL / totalCost) * 100 : 0;
@@ -208,6 +211,28 @@ export default function AssetsPage() {
     setDeleteAssetId(assetId);
     setDeleteConfirmOpen(true);
   };
+
+  useEffect(() => {
+    const nextTab = searchParams.get("tab") || "overview";
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    }
+  }, [activeTab, searchParams]);
+
+  useEffect(() => {
+    const action = searchParams.get("action");
+    if (!action) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("action");
+    setSearchParams(nextParams, { replace: true });
+
+    if (action === "add-asset") {
+      openAddAsset();
+    }
+  }, [searchParams, setSearchParams]);
 
   const handleSaveAsset = () => {
     const quantity = parseFloat(assetForm.quantity);
@@ -356,7 +381,19 @@ export default function AssetsPage() {
         </Button>
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          setActiveTab(value);
+          const nextParams = new URLSearchParams(searchParams);
+          if (value === "overview") {
+            nextParams.delete("tab");
+          } else {
+            nextParams.set("tab", value);
+          }
+          setSearchParams(nextParams, { replace: true });
+        }}
+      >
         <TabsList className="grid w-full grid-cols-6 lg:inline-flex lg:w-auto">
           <TabsTrigger value="overview" className="gap-1.5"><PieIcon className="hidden h-3.5 w-3.5 sm:block" /> Overview</TabsTrigger>
           <TabsTrigger value="stocks" className="gap-1.5"><BarChart3 className="hidden h-3.5 w-3.5 sm:block" /> Stocks</TabsTrigger>

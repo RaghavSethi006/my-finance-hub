@@ -12,8 +12,10 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getDesktopPaths, isTauriDesktop } from "@/lib/desktop";
 import type { DesktopPaths } from "@/lib/types";
+import { useSearchParams } from "react-router-dom";
 
 export default function SettingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const {
     settings,
     securityStatus,
@@ -58,6 +60,26 @@ export default function SettingsPage() {
         console.error('Unable to load desktop paths', error);
       });
   }, []);
+
+  useEffect(() => {
+    const action = searchParams.get('action');
+    if (!action) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('action');
+    setSearchParams(nextParams, { replace: true });
+
+    if (action === 'app-pin') {
+      setPinDialogOpen(true);
+      return;
+    }
+
+    if (action === 'vault-password') {
+      setVaultDialogOpen(true);
+    }
+  }, [searchParams, setSearchParams]);
 
   const handleExportJSON = () => {
     const json = exportAllData();

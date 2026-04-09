@@ -14,6 +14,7 @@ import { VaultDocument } from "@/lib/types";
 import { deleteVaultDocument, importVaultDocument, isTauriDesktop, readVaultDocument } from "@/lib/desktop";
 import { FileText, Grid3X3, List, Lock, Search, Shield, Trash2, Unlock, Upload, Edit2, Download } from "lucide-react";
 import { toast } from "sonner";
+import { useSearchParams } from "react-router-dom";
 
 const FILE_ICONS: Record<string, string> = {
   pdf: "PDF",
@@ -140,6 +141,7 @@ function summarizeLinkedRecord(
 }
 
 export default function VaultPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const {
     documents,
     transactions,
@@ -416,6 +418,21 @@ export default function VaultPage() {
       toast.error("Failed to delete document");
     }
   };
+
+  useEffect(() => {
+    const action = searchParams.get("action");
+    if (!action) {
+      return;
+    }
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("action");
+    setSearchParams(nextParams, { replace: true });
+
+    if (action === "upload") {
+      window.setTimeout(() => fileInputRef.current?.click(), 50);
+    }
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (!selectedDocument || !detailOpen || !isTauriDesktop() || !isPreviewable(selectedDocument.fileType)) {
