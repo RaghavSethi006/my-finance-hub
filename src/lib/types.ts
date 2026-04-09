@@ -29,6 +29,15 @@ export interface Account {
   color: string;
   icon: string;
   createdAt: string;
+  // Extended details
+  bankName?: string;
+  accountNumber?: string;  // masked, e.g. ****1234
+  ifscCode?: string;
+  branchName?: string;
+  nominees?: string[];
+  loginUrl?: string;
+  notes?: string;
+  isActive: boolean;
 }
 
 export interface Category {
@@ -79,7 +88,6 @@ export interface Asset {
   currency: Currency;
   purchaseDate: string;
   notes?: string;
-  // Mutual fund specific
   fundHouse?: string;
   nav?: number;
   sipAmount?: number;
@@ -94,7 +102,7 @@ export interface Loan {
   outstandingAmount: number;
   interestRate: number;
   emi: number;
-  tenure: number; // months
+  tenure: number;
   startDate: string;
   endDate: string;
   currency: Currency;
