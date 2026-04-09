@@ -1,8 +1,19 @@
+import { useMemo, useState } from "react";
 import { useFinOS } from "@/lib/store";
 import { formatCurrency, formatPercent } from "@/lib/currency";
-import { buildMonthlyIncomeExpenseSeries } from "@/lib/analytics";
+import {
+  buildIncomeExpenseSeries,
+  buildRolling30DayExpenseSeries,
+  DashboardRangePreset,
+  DashboardRangeSelection,
+  filterTransactionsByRange,
+  resolveDashboardRange,
+  summarizeTransactions,
+} from "@/lib/analytics";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   TrendingUp,
   Wallet,
@@ -27,6 +38,8 @@ import {
   PieChart as RechartsPieChart,
   Pie,
   Cell,
+  BarChart,
+  Bar,
 } from "recharts";
 
 function getGreeting() {
@@ -34,6 +47,19 @@ function getGreeting() {
   if (hour < 12) return "Good morning";
   if (hour < 17) return "Good afternoon";
   return "Good evening";
+}
+
+function getRangeDescription(start: string, end: string) {
+  if (start === end) {
+    return start;
+  }
+  return `${start} to ${end}`;
+}
+
+function getDayCount(start: string, end: string) {
+  const startDate = new Date(`${start}T00:00:00`);
+  const endDate = new Date(`${end}T00:00:00`);
+  return Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1);
 }
 
 const ASSET_COLORS = [
@@ -45,20 +71,49 @@ const ASSET_COLORS = [
   "hsl(190, 80%, 42%)",
 ];
 
+const RANGE_OPTIONS: Array<{ value: DashboardRangePreset; label: string }> = [
+  { value: "this_week", label: "This week" },
+  { value: "this_month", label: "This month" },
+  { value: "last_30_days", label: "Last 30 days" },
+  { value: "this_year", label: "This year" },
+  { value: "all_time", label: "All time" },
+  { value: "custom", label: "Custom" },
+];
+
 export default function Dashboard() {
   const { settings, accounts, transactions, assets, budgets, alerts, documents, categories, recurringTemplates } = useFinOS();
   const netWorth = useFinOS((state) => state.netWorth());
   const portfolioValue = useFinOS((state) => state.totalPortfolioValue());
   const portfolioCost = useFinOS((state) => state.totalPortfolioCost());
-  const monthlyIncome = useFinOS((state) => state.monthlyIncome());
-  const monthlyExpenses = useFinOS((state) => state.monthlyExpenses());
 
-  const monthlySpendingData = buildMonthlyIncomeExpenseSeries(transactions);
+  const [rangeSelection, setRangeSelection] = useState<DashboardRangeSelection>({
+    preset: "this_month",
+  });
+
+  const resolvedRange = useMemo(
+    () => resolveDashboardRange(rangeSelection, transactions),
+    [rangeSelection, transactions]
+  );
+  const rangeTransactions = useMemo(
+    () => filterTransactionsByRange(transactions, resolvedRange),
+    [transactions, resolvedRange]
+  );
+  const periodSummary = useMemo(() => summarizeTransactions(rangeTransactions), [rangeTransactions]);
+  const incomeExpenseData = useMemo(
+    () => buildIncomeExpenseSeries(rangeTransactions, resolvedRange),
+    [rangeTransactions, resolvedRange]
+  );
+  const rolling30DaySpendingData = useMemo(
+    () => buildRolling30DayExpenseSeries(transactions),
+    [transactions]
+  );
+
   const portfolioPL = portfolioValue - portfolioCost;
   const portfolioPLPercent = portfolioCost > 0 ? (portfolioPL / portfolioCost) * 100 : 0;
-  const monthlySavings = monthlyIncome - monthlyExpenses;
-  const savingsRate = monthlyIncome > 0 ? (monthlySavings / monthlyIncome) * 100 : 0;
   const unreadAlerts = alerts.filter((alert) => !alert.read);
+  const periodDayCount = getDayCount(resolvedRange.start, resolvedRange.end);
+  const annualizedIncome = periodSummary.income * (365 / periodDayCount);
+  const estimatedTax = annualizedIncome * 0.22;
 
   const assetAllocation = assets.reduce((accumulator, asset) => {
     const label =
@@ -82,36 +137,99 @@ export default function Dashboard() {
   }, [] as { name: string; value: number }[]);
 
   const budgetOnTrack = budgets.filter((budget) => budget.amount > 0 && (budget.spent / budget.amount) * 100 < budget.alertThreshold).length;
-  const recentTransactions = [...transactions]
+  const recentTransactions = [...rangeTransactions]
     .sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime())
     .slice(0, 5);
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
-      <div className="animate-fade-in">
-        <h1 className="text-2xl font-bold tracking-tight">
-          {getGreeting()}, {settings.name}
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">Here&apos;s your financial overview for today</p>
+      <div className="animate-fade-in space-y-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {getGreeting()}, {settings.name}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">Choose the timeline you want the dashboard to summarize.</p>
+        </div>
+
+        <Card>
+          <CardContent className="space-y-4 pt-5">
+            <div className="flex flex-wrap gap-2">
+              {RANGE_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  variant={rangeSelection.preset === option.value ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setRangeSelection((selection) => ({ ...selection, preset: option.value }))}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+            {rangeSelection.preset === "custom" && (
+              <div className="grid gap-3 md:grid-cols-3">
+                <div>
+                  <p className="mb-1 text-xs text-muted-foreground">Custom start</p>
+                  <Input
+                    type="date"
+                    value={rangeSelection.customStart || ""}
+                    onChange={(event) =>
+                      setRangeSelection((selection) => ({ ...selection, customStart: event.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <p className="mb-1 text-xs text-muted-foreground">Custom end</p>
+                  <Input
+                    type="date"
+                    value={rangeSelection.customEnd || ""}
+                    onChange={(event) =>
+                      setRangeSelection((selection) => ({ ...selection, customEnd: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={() =>
+                      setRangeSelection({
+                        preset: "custom",
+                        customStart: "",
+                        customEnd: "",
+                      })
+                    }
+                  >
+                    Clear custom dates
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <Badge variant="secondary">{resolvedRange.label}</Badge>
+              <span>{getRangeDescription(resolvedRange.start, resolvedRange.end)}</span>
+              <span>{rangeTransactions.length} transactions in range</span>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <SummaryCard
           title="Net Worth"
           value={formatCurrency(netWorth, settings.defaultCurrency)}
-          change="+8.2%"
-          changeType="positive"
+          change="Current snapshot"
+          changeType="neutral"
           icon={<TrendingUp className="h-4 w-4" />}
-          subtitle="vs last month"
+          subtitle="Across accounts, assets, and liabilities"
           delay={0}
         />
         <SummaryCard
-          title="This Month"
-          value={formatCurrency(monthlySavings, settings.defaultCurrency)}
-          change={`${savingsRate.toFixed(0)}% saved`}
-          changeType={savingsRate > 20 ? "positive" : "warning"}
+          title={resolvedRange.label}
+          value={formatCurrency(periodSummary.savings, settings.defaultCurrency)}
+          change={periodSummary.income > 0 ? `${periodSummary.savingsRate.toFixed(0)}% saved` : "No income yet"}
+          changeType={periodSummary.savings >= 0 ? "positive" : "warning"}
           icon={<Wallet className="h-4 w-4" />}
-          subtitle={`${formatCurrency(monthlyIncome, settings.defaultCurrency)} in / ${formatCurrency(monthlyExpenses, settings.defaultCurrency)} out`}
+          subtitle={`${formatCurrency(periodSummary.income, settings.defaultCurrency)} in / ${formatCurrency(periodSummary.expenses, settings.defaultCurrency)} out`}
           delay={1}
         />
         <SummaryCard
@@ -125,11 +243,11 @@ export default function Dashboard() {
         />
         <SummaryCard
           title="Tax Estimate"
-          value={formatCurrency(monthlyIncome * 12 * 0.22, settings.defaultCurrency)}
-          change="FY 2024-25"
+          value={formatCurrency(estimatedTax, settings.defaultCurrency)}
+          change="Annualized"
           changeType="neutral"
           icon={<Calculator className="h-4 w-4" />}
-          subtitle="Based on current income"
+          subtitle={`Projected from ${resolvedRange.label.toLowerCase()} income pace`}
           delay={3}
         />
       </div>
@@ -137,12 +255,14 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="animate-fade-in lg:col-span-2" style={{ animationDelay: "200ms" }}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Income vs Expenses (6 months)</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              Income vs Expenses ({resolvedRange.label})
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[260px]">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={monthlySpendingData}>
+                <AreaChart data={incomeExpenseData}>
                   <defs>
                     <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="hsl(152, 60%, 40%)" stopOpacity={0.3} />
@@ -154,8 +274,13 @@ export default function Dashboard() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
+                  <XAxis dataKey="period" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(value) => formatCurrency(value, settings.defaultCurrency)}
+                  />
                   <Tooltip
                     contentStyle={{
                       backgroundColor: "hsl(var(--card))",
@@ -163,7 +288,7 @@ export default function Dashboard() {
                       borderRadius: "8px",
                       fontSize: "12px",
                     }}
-                    formatter={(value: number) => [`$${value.toLocaleString()}`, ""]}
+                    formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), ""]}
                   />
                   <Area type="monotone" dataKey="income" stroke="hsl(152, 60%, 40%)" fill="url(#incomeGrad)" strokeWidth={2} name="Income" />
                   <Area type="monotone" dataKey="expenses" stroke="hsl(0, 72%, 51%)" fill="url(#expenseGrad)" strokeWidth={2} name="Expenses" />
@@ -186,7 +311,7 @@ export default function Dashboard() {
                       <Cell key={index} fill={ASSET_COLORS[index % ASSET_COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value: number) => [`$${value.toLocaleString()}`, ""]} />
+                  <Tooltip formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), ""]} />
                 </RechartsPieChart>
               </ResponsiveContainer>
             </div>
@@ -206,39 +331,40 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="animate-fade-in lg:col-span-2" style={{ animationDelay: "400ms" }}>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Recent Transactions</CardTitle>
-              <span className="cursor-pointer text-xs text-primary hover:underline">View all -&gt;</span>
-            </div>
+        <Card className="animate-fade-in lg:col-span-2" style={{ animationDelay: "350ms" }}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Spending in the Last 30 Days</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-1">
-            {recentTransactions.map((transaction) => {
-              const category = categories.find((item) => item.id === transaction.categoryId);
-              const isIncome = transaction.type === "income";
-              return (
-                <div key={transaction.id} className="flex items-center justify-between border-b py-2.5 last:border-0">
-                  <div className="flex items-center gap-3">
-                    <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${isIncome ? "bg-profit-muted" : "bg-secondary"}`}>
-                      {isIncome ? <ArrowUpRight className="h-4 w-4 text-profit" /> : <ArrowDownRight className="h-4 w-4 text-muted-foreground" />}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium">{transaction.note}</p>
-                      <p className="text-xs text-muted-foreground">{category?.name} / {transaction.date}</p>
-                    </div>
-                  </div>
-                  <span className={`text-sm font-mono font-semibold ${isIncome ? "text-profit" : ""}`}>
-                    {isIncome ? "+" : "-"}
-                    {formatCurrency(transaction.amount, transaction.currency)}
-                  </span>
-                </div>
-              );
-            })}
+          <CardContent>
+            <div className="h-[260px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={rolling30DaySpendingData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="day" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} minTickGap={20} />
+                  <YAxis
+                    tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(value) => formatCurrency(value, settings.defaultCurrency)}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "hsl(var(--card))",
+                      border: "1px solid hsl(var(--border))",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                    }}
+                    formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), "Spending"]}
+                  />
+                  <Bar dataKey="spending" fill="hsl(220, 70%, 50%)" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">This is a true rolling 30-day view, including today, rather than a calendar-month slice.</p>
           </CardContent>
         </Card>
 
-        <Card className="animate-fade-in" style={{ animationDelay: "500ms" }}>
+        <Card className="animate-fade-in" style={{ animationDelay: "400ms" }}>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">Alerts & Insights</CardTitle>
@@ -264,99 +390,118 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="animate-fade-in" style={{ animationDelay: "600ms" }}>
-          <CardContent className="pt-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium text-muted-foreground">Budgets</span>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="animate-fade-in lg:col-span-2" style={{ animationDelay: "500ms" }}>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Recent Transactions ({resolvedRange.label})</CardTitle>
+              <span className="text-xs text-muted-foreground">{getRangeDescription(resolvedRange.start, resolvedRange.end)}</span>
             </div>
-            <p className="text-lg font-bold">
-              {budgetOnTrack} of {budgets.length} on track
-            </p>
-            <div className="mt-3 space-y-2">
-              {budgets.slice(0, 3).map((budget) => {
-                const category = categories.find((item) => item.id === budget.categoryId);
-                const percentage = budget.amount > 0 ? (budget.spent / budget.amount) * 100 : 0;
-                return (
-                  <div key={budget.id}>
-                    <div className="mb-1 flex justify-between text-xs">
-                      <span className="text-muted-foreground">{category?.name}</span>
-                      <span className="font-mono">{percentage.toFixed(0)}%</span>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {recentTransactions.length > 0 ? recentTransactions.map((transaction) => {
+              const category = categories.find((item) => item.id === transaction.categoryId);
+              const isIncome = transaction.type === "income";
+              const prefix = transaction.type === "transfer" ? "" : isIncome ? "+" : "-";
+              return (
+                <div key={transaction.id} className="flex items-center justify-between border-b py-2.5 last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${isIncome ? "bg-profit-muted" : "bg-secondary"}`}>
+                      {isIncome ? <ArrowUpRight className="h-4 w-4 text-profit" /> : <ArrowDownRight className="h-4 w-4 text-muted-foreground" />}
                     </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
-                      <div
-                        className={`h-full rounded-full transition-all ${percentage >= 90 ? "bg-loss" : percentage >= 70 ? "bg-warning" : "bg-profit"}`}
-                        style={{ width: `${Math.min(percentage, 100)}%` }}
-                      />
+                    <div>
+                      <p className="text-sm font-medium">{transaction.note}</p>
+                      <p className="text-xs text-muted-foreground">{category?.name || "Uncategorized"} / {transaction.date}</p>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="animate-fade-in" style={{ animationDelay: "650ms" }}>
-          <CardContent className="pt-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium text-muted-foreground">Accounts</span>
-            </div>
-            <p className="text-lg font-bold">{accounts.length} accounts</p>
-            <div className="mt-3 space-y-2">
-              {accounts.slice(0, 3).map((account) => (
-                <div key={account.id} className="flex items-center justify-between text-xs">
-                  <span className="truncate text-muted-foreground">{account.name}</span>
-                  <span className={`font-mono font-medium ${account.balance < 0 ? "text-loss" : ""}`}>
-                    {formatCurrency(account.balance, account.currency)}
+                  <span className={`text-sm font-mono font-semibold ${isIncome ? "text-profit" : ""}`}>
+                    {prefix}
+                    {formatCurrency(transaction.amount, transaction.currency)}
                   </span>
                 </div>
-              ))}
-            </div>
+              );
+            }) : (
+              <div className="py-10 text-center text-sm text-muted-foreground">
+                No transactions in this range yet.
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        <Card className="animate-fade-in" style={{ animationDelay: "700ms" }}>
-          <CardContent className="pt-5">
-            <div className="mb-3 flex items-center gap-2">
-              <FileText className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium text-muted-foreground">Vault</span>
-            </div>
-            <p className="text-lg font-bold">{documents.length} documents</p>
-            <p className="mt-1 text-xs text-muted-foreground">Encrypted and secure</p>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {["banking", "tax", "legal", "personal"].map((category) => {
-                const count = documents.filter((document) => document.category === category).length;
-                if (count === 0) return null;
-                return (
-                  <Badge key={category} variant="secondary" className="text-[10px] capitalize">
-                    {category} ({count})
-                  </Badge>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
+        <div className="grid gap-4">
+          <Card className="animate-fade-in" style={{ animationDelay: "600ms" }}>
+            <CardContent className="pt-5">
+              <div className="mb-3 flex items-center gap-2">
+                <Wallet className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium text-muted-foreground">Budgets</span>
+              </div>
+              <p className="text-lg font-bold">
+                {budgetOnTrack} of {budgets.length} on track
+              </p>
+              <div className="mt-3 space-y-2">
+                {budgets.slice(0, 3).map((budget) => {
+                  const category = categories.find((item) => item.id === budget.categoryId);
+                  const percentage = budget.amount > 0 ? (budget.spent / budget.amount) * 100 : 0;
+                  return (
+                    <div key={budget.id}>
+                      <div className="mb-1 flex justify-between text-xs">
+                        <span className="text-muted-foreground">{category?.name}</span>
+                        <span className="font-mono">{percentage.toFixed(0)}%</span>
+                      </div>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
+                        <div
+                          className={`h-full rounded-full transition-all ${percentage >= 90 ? "bg-loss" : percentage >= 70 ? "bg-warning" : "bg-profit"}`}
+                          style={{ width: `${Math.min(percentage, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
 
-        <Card className="animate-fade-in" style={{ animationDelay: "750ms" }}>
-          <CardContent className="pt-5">
-            <div className="mb-3 flex items-center gap-2">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium text-muted-foreground">Recurring</span>
-            </div>
-            <p className="text-lg font-bold">{recurringTemplates.filter((template) => !template.isPaused).length} active</p>
-            <p className="mt-1 text-xs text-muted-foreground">Desktop-scheduled templates</p>
-            <div className="mt-3 space-y-1.5">
-              {recurringTemplates.filter((template) => !template.isPaused).slice(0, 2).map((template) => (
-                <div key={template.id} className="flex items-center justify-between gap-2 text-xs">
-                  <span className="truncate text-muted-foreground">{template.note}</span>
-                  <span className="shrink-0 font-mono">{formatCurrency(template.amount, template.currency)}</span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+          <Card className="animate-fade-in" style={{ animationDelay: "650ms" }}>
+            <CardContent className="pt-5">
+              <div className="mb-3 flex items-center gap-2">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium text-muted-foreground">Vault</span>
+              </div>
+              <p className="text-lg font-bold">{documents.length} documents</p>
+              <p className="mt-1 text-xs text-muted-foreground">Encrypted and stored locally</p>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {["banking", "tax", "legal", "personal"].map((category) => {
+                  const count = documents.filter((document) => document.category === category).length;
+                  if (count === 0) return null;
+                  return (
+                    <Badge key={category} variant="secondary" className="text-[10px] capitalize">
+                      {category} ({count})
+                    </Badge>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="animate-fade-in" style={{ animationDelay: "700ms" }}>
+            <CardContent className="pt-5">
+              <div className="mb-3 flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium text-muted-foreground">Recurring</span>
+              </div>
+              <p className="text-lg font-bold">{recurringTemplates.filter((template) => !template.isPaused).length} active</p>
+              <p className="mt-1 text-xs text-muted-foreground">Desktop-scheduled templates</p>
+              <div className="mt-3 space-y-1.5">
+                {recurringTemplates.filter((template) => !template.isPaused).slice(0, 2).map((template) => (
+                  <div key={template.id} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate text-muted-foreground">{template.note}</span>
+                    <span className="shrink-0 font-mono">{formatCurrency(template.amount, template.currency)}</span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );
