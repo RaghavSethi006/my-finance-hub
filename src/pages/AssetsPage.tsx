@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { buildPortfolioHistory } from "@/lib/analytics";
 import { formatCurrency, formatPercent } from "@/lib/currency";
 import { useFinOS } from "@/lib/store";
-import { Asset, AssetType, Currency, CURRENCY_CONFIG } from "@/lib/types";
+import { Asset, AssetType, Currency, CURRENCY_CONFIG, VaultDocument } from "@/lib/types";
 import {
   BarChart3,
   Bitcoin,
@@ -22,6 +22,7 @@ import {
   Car,
   CreditCard,
   Edit2,
+  FileText,
   Gem,
   GraduationCap,
   Landmark,
@@ -97,7 +98,7 @@ function generateId(prefix: string) {
 }
 
 export default function AssetsPage() {
-  const { assets, loans, settings, addAsset, updateAsset, deleteAsset } = useFinOS();
+  const { assets, loans, documents, settings, addAsset, updateAsset, deleteAsset } = useFinOS();
   const portfolioHistory = buildPortfolioHistory(assets);
   const totalValue = useFinOS((state) => state.totalPortfolioValue());
   const totalCost = useFinOS((state) => state.totalPortfolioCost());
@@ -118,6 +119,24 @@ export default function AssetsPage() {
   const mutualFunds = assets.filter((asset) => asset.type === "mutual_fund");
   const cryptos = assets.filter((asset) => asset.type === "crypto");
   const physicalAssets = assets.filter((asset) => ["real_estate", "vehicle", "gold", "other"].includes(asset.type));
+
+  const assetDocumentCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    documents.forEach((document) => {
+      if (document.linkedEntityType === "asset" && document.linkedEntityId) {
+        counts[document.linkedEntityId] = (counts[document.linkedEntityId] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [documents]);
+
+  const selectedAssetDocuments = useMemo(
+    () =>
+      selectedAsset
+        ? documents.filter((document) => document.linkedEntityType === "asset" && document.linkedEntityId === selectedAsset.id)
+        : [],
+    [documents, selectedAsset]
+  );
 
   const allocation = useMemo(() => {
     const groups: Record<string, number> = {};
@@ -255,6 +274,7 @@ export default function AssetsPage() {
     const cost = asset.buyPrice * asset.quantity;
     const profitLoss = value - cost;
     const profitLossPercent = cost > 0 ? (profitLoss / cost) * 100 : 0;
+    const linkedDocCount = assetDocumentCounts[asset.id] || 0;
 
     return (
       <TableRow key={asset.id} className="cursor-pointer hover:bg-secondary/30" onClick={() => openAssetDetails(asset)}>
@@ -268,6 +288,7 @@ export default function AssetsPage() {
               <p className="text-xs text-muted-foreground">
                 {asset.ticker ? asset.ticker : assetTypeLabels[asset.type]}
                 {asset.exchange ? ` / ${asset.exchange}` : ""}
+                {linkedDocCount > 0 ? ` · ${linkedDocCount} doc${linkedDocCount === 1 ? "" : "s"}` : ""}
               </p>
             </div>
           </div>
@@ -504,6 +525,7 @@ export default function AssetsPage() {
               const profitLoss = value - cost;
               const percentage = cost > 0 ? (profitLoss / cost) * 100 : 0;
               const isDepreciating = profitLoss < 0;
+              const linkedDocCount = assetDocumentCounts[asset.id] || 0;
               return (
                 <Card key={asset.id} className="cursor-pointer transition-shadow hover:shadow-md" onClick={() => openAssetDetails(asset)}>
                   <CardContent className="pt-5">
@@ -514,7 +536,10 @@ export default function AssetsPage() {
                       <div className="flex-1">
                         <div className="flex items-center justify-between">
                           <p className="text-sm font-medium">{asset.name}</p>
-                          <Badge variant="secondary" className="text-[10px] capitalize">{asset.type.replace("_", " ")}</Badge>
+                          <div className="flex items-center gap-1">
+                            {linkedDocCount > 0 && <Badge variant="outline" className="text-[10px]">{linkedDocCount} docs</Badge>}
+                            <Badge variant="secondary" className="text-[10px] capitalize">{asset.type.replace("_", " ")}</Badge>
+                          </div>
                         </div>
                         <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
                           <div>
@@ -790,6 +815,23 @@ export default function AssetsPage() {
                 </>
               )}
 
+              {selectedAssetDocuments.length > 0 && (
+                <>
+                  <Separator />
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <FileText className="h-3.5 w-3.5" />
+                      Linked Documents
+                    </div>
+                    <div className="space-y-2">
+                      {selectedAssetDocuments.map((document) => (
+                        <LinkedAssetDocumentRow key={document.id} document={document} />
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
               <Separator />
 
               <div className="flex gap-2">
@@ -872,5 +914,23 @@ function AssetTable({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function LinkedAssetDocumentRow({ document }: { document: VaultDocument }) {
+  return (
+    <div className="rounded-lg border bg-secondary/20 px-3 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{document.name}</p>
+          <p className="text-xs text-muted-foreground">
+            {document.fileType.toUpperCase()} · {document.category}
+          </p>
+        </div>
+        <Badge variant="outline" className="text-[10px]">
+          {document.updatedAt.slice(0, 10)}
+        </Badge>
+      </div>
+    </div>
   );
 }

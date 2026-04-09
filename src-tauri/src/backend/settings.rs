@@ -22,7 +22,14 @@ pub fn load_settings(conn: &Connection) -> Result<UserSettings, String> {
 pub fn insert_settings(transaction: &Transaction<'_>, settings: &UserSettings) -> Result<(), String> {
   transaction
     .execute(
-      "INSERT INTO settings (id, name, default_currency, theme, date_format) VALUES (1, ?, ?, ?, ?)",
+      "INSERT INTO settings (id, name, default_currency, theme, date_format)
+       VALUES (1, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         default_currency = excluded.default_currency,
+         theme = excluded.theme,
+         date_format = excluded.date_format,
+         updated_at = datetime('now')",
       params![settings.name, settings.default_currency, settings.theme, settings.date_format],
     )
     .map_err(|error| format!("Unable to store settings: {error}"))?;

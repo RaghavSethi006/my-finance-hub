@@ -111,8 +111,8 @@ export const sampleDocuments: VaultDocument[] = [
   { id: 'doc-3', name: 'Apartment Deed', category: 'legal', fileType: 'pdf', size: 3500000, tags: ['property', 'deed'], linkedEntityId: 'ast-5', linkedEntityType: 'asset', createdAt: '2021-08-15', updatedAt: '2021-08-15' },
   { id: 'doc-4', name: 'Health Insurance Policy', category: 'personal', fileType: 'pdf', size: 890000, tags: ['insurance', 'health'], createdAt: '2025-01-01', updatedAt: '2025-01-01' },
   { id: 'doc-5', name: 'W-2 Form 2024', category: 'tax', fileType: 'pdf', size: 156000, tags: ['w2', 'income'], createdAt: '2025-02-01', updatedAt: '2025-02-01' },
-  { id: 'doc-6', name: 'Car Loan Agreement', category: 'legal', fileType: 'pdf', size: 420000, tags: ['loan', 'auto'], linkedEntityId: 'loan-2', linkedEntityType: 'asset', createdAt: '2022-03-10', updatedAt: '2022-03-10' },
-  { id: 'doc-7', name: 'Mortgage Agreement', category: 'legal', fileType: 'pdf', size: 1850000, tags: ['mortgage', 'home'], linkedEntityId: 'loan-1', linkedEntityType: 'asset', createdAt: '2021-08-15', updatedAt: '2021-08-15' },
+  { id: 'doc-6', name: 'Car Loan Agreement', category: 'legal', fileType: 'pdf', size: 420000, tags: ['loan', 'auto'], linkedEntityId: 'ast-15', linkedEntityType: 'asset', createdAt: '2022-03-10', updatedAt: '2022-03-10' },
+  { id: 'doc-7', name: 'Mortgage Agreement', category: 'legal', fileType: 'pdf', size: 1850000, tags: ['mortgage', 'home'], linkedEntityId: 'ast-5', linkedEntityType: 'asset', createdAt: '2021-08-15', updatedAt: '2021-08-15' },
 ];
 
 export const sampleAlerts: Alert[] = [

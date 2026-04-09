@@ -3,11 +3,21 @@ mod backend;
 use backend::{
   delete_vault_document,
   get_desktop_paths,
+  get_security_status,
   import_vault_document,
   initialize_app_state,
+  lock_app,
+  lock_vault,
+  log_frontend_event,
   load_app_state,
+  record_security_activity,
   read_vault_document,
   replace_app_state,
+  set_app_pin,
+  set_auto_lock_timeout,
+  set_vault_password,
+  unlock_app,
+  unlock_vault,
 };
 use tauri::Manager;
 
@@ -32,7 +42,17 @@ pub fn run() {
       import_vault_document,
       delete_vault_document,
       read_vault_document,
-      get_desktop_paths
+      get_desktop_paths,
+      log_frontend_event,
+      get_security_status,
+      record_security_activity,
+      lock_app,
+      unlock_app,
+      set_app_pin,
+      lock_vault,
+      unlock_vault,
+      set_vault_password,
+      set_auto_lock_timeout
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -4,6 +4,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use super::{
   models::{ImportVaultDocumentPayload, VaultDocument},
+  security,
   storage::AppState,
 };
 
@@ -15,8 +16,9 @@ pub fn import_vault_document(payload: ImportVaultDocumentPayload, state: &AppSta
     format!("{}.{}", payload.id, extension)
   };
   let file_path = state.vault_dir.join(file_name);
+  let encrypted_bytes = security::encrypt_vault_bytes(state, &payload.bytes)?;
 
-  fs::write(&file_path, &payload.bytes).map_err(|error| format!("Unable to store vault file: {error}"))?;
+  fs::write(&file_path, encrypted_bytes).map_err(|error| format!("Unable to store vault file: {error}"))?;
 
   Ok(VaultDocument {
     id: payload.id,
@@ -57,7 +59,7 @@ pub fn delete_vault_document(conn: &Connection, document_id: &str) -> Result<(),
   Ok(())
 }
 
-pub fn read_vault_document(conn: &Connection, document_id: &str) -> Result<Vec<u8>, String> {
+pub fn read_vault_document(conn: &Connection, state: &AppState, document_id: &str) -> Result<Vec<u8>, String> {
   let file_path: String = conn
     .query_row(
       "SELECT file_path FROM vault_documents WHERE id = ?",
@@ -66,7 +68,8 @@ pub fn read_vault_document(conn: &Connection, document_id: &str) -> Result<Vec<u
     )
     .map_err(|error| format!("Unable to lookup vault document: {error}"))?;
 
-  fs::read(&file_path).map_err(|error| format!("Unable to read vault file: {error}"))
+  let encrypted = fs::read(&file_path).map_err(|error| format!("Unable to read vault file: {error}"))?;
+  security::decrypt_vault_bytes(state, &encrypted)
 }
 
 pub fn load_documents(conn: &Connection) -> Result<Vec<VaultDocument>, String> {

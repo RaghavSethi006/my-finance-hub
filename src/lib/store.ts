@@ -7,6 +7,7 @@ import type {
   Asset,
   Budget,
   Category,
+  DesktopSecurityStatus,
   DesktopSnapshot,
   JournalEntry,
   JournalEntryLine,
@@ -28,16 +29,42 @@ import {
   sampleRecurringTemplates,
   sampleTransactions,
 } from './sample-data';
-import { isTauriDesktop, loadDesktopState, replaceDesktopState } from './desktop';
+import {
+  getSecurityStatus as fetchSecurityStatus,
+  isTauriDesktop,
+  loadDesktopState,
+  lockApp as lockDesktopApp,
+  lockVault as lockDesktopVault,
+  logDesktopEvent,
+  recordSecurityActivity as touchDesktopSecurity,
+  replaceDesktopState,
+  setAppPin as saveAppPin,
+  setAutoLockTimeout as saveAutoLockTimeout,
+  setVaultPassword as saveVaultPassword,
+  unlockApp as unlockDesktopApp,
+  unlockVault as unlockDesktopVault,
+} from './desktop';
 
-type SerializableFinOSState = DesktopSnapshot & {
-  isVaultLocked: boolean;
+type SerializableFinOSState = DesktopSnapshot;
+
+const defaultSecurityStatus: DesktopSecurityStatus = {
+  hasAppPin: false,
+  hasVaultPassword: false,
+  isAppLocked: false,
+  isVaultLocked: false,
+  autoLockTimeoutSeconds: 600,
+  appCooldownRemainingSeconds: 0,
+  vaultCooldownRemainingSeconds: 0,
+  appFailedAttempts: 0,
+  vaultFailedAttempts: 0,
 };
 
 interface FinOSState extends SerializableFinOSState {
   isDesktop: boolean;
   isHydrating: boolean;
   isHydrated: boolean;
+  isSecurityReady: boolean;
+  securityStatus: DesktopSecurityStatus;
 
   totalBalance: () => number;
   netWorth: () => number;
@@ -48,9 +75,17 @@ interface FinOSState extends SerializableFinOSState {
   monthlyExpenses: () => number;
 
   hydrateDesktop: () => Promise<void>;
+  refreshSecurityStatus: () => Promise<void>;
+  recordSecurityActivity: () => Promise<void>;
+  unlockApp: (pin: string) => Promise<void>;
+  lockApp: () => Promise<void>;
+  setAppPin: (currentPin: string | undefined, newPin: string) => Promise<void>;
+  unlockVault: (password: string) => Promise<void>;
+  lockVault: () => Promise<void>;
+  setVaultPassword: (currentPassword: string | undefined, newPassword: string) => Promise<void>;
+  setAutoLockTimeout: (timeoutSeconds: number) => Promise<void>;
   updateSettings: (s: Partial<UserSettings>) => void;
   markAlertRead: (id: string) => void;
-  toggleVaultLock: () => void;
   addRecurringTemplate: (template: RecurringTemplate) => void;
   updateRecurringTemplate: (id: string, updates: Partial<RecurringTemplate>) => void;
   deleteRecurringTemplate: (id: string) => void;
@@ -98,7 +133,6 @@ const initialData = (): SerializableFinOSState => ({
   journalEntries: sampleJournalEntries,
   documents: sampleDocuments,
   alerts: sampleAlerts,
-  isVaultLocked: true,
 });
 
 function cloneData<T>(value: T): T {
@@ -300,7 +334,6 @@ function normalizeData(data: DesktopSnapshot): SerializableFinOSState {
     recurringTemplates: data.recurringTemplates ?? [],
     budgets,
     journalEntries,
-    isVaultLocked: true,
   };
 }
 
@@ -333,17 +366,55 @@ function hasDesktopData(snapshot: DesktopSnapshot): boolean {
   );
 }
 
+function serializeMutationDetails(value?: string | Record<string, unknown>): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '[unserializable-details]';
+  }
+}
+
 export const useFinOS = create<FinOSState>()(
   persist(
     (set, get) => {
-      const syncToDesktop = () => {
+      const emitDesktopLog = (level: 'debug' | 'info' | 'warn' | 'error', action: string, details?: string | Record<string, unknown>) => {
+        if (!get().isDesktop) {
+          return;
+        }
+
+        const serialized = serializeMutationDetails(details);
+        void logDesktopEvent(level, action, serialized).catch((error) => {
+          console.error(`Failed to write desktop log for ${action}`, error);
+        });
+      };
+
+      const syncToDesktop = (action = 'state.sync', details?: string | Record<string, unknown>) => {
         if (!get().isDesktop || !get().isHydrated || get().isHydrating) {
           return;
         }
 
-        void replaceDesktopState(snapshotFromState(get())).catch((error) => {
-          console.error('Failed to sync FinOS state to desktop backend', error);
-        });
+        const serialized = serializeMutationDetails(details);
+        emitDesktopLog('info', `${action}.requested`, serialized);
+
+        void replaceDesktopState(snapshotFromState(get()))
+          .then(() => {
+            emitDesktopLog('info', `${action}.synced`, serialized);
+          })
+          .catch((error) => {
+            console.error('Failed to sync FinOS state to desktop backend', error);
+            emitDesktopLog('error', `${action}.sync_failed`, {
+              details: serialized ?? null,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          });
       };
 
       return {
@@ -351,6 +422,8 @@ export const useFinOS = create<FinOSState>()(
         isDesktop: false,
         isHydrating: false,
         isHydrated: false,
+        isSecurityReady: false,
+        securityStatus: defaultSecurityStatus,
 
         totalBalance: () => get().accounts.reduce((sum, account) => sum + account.balance, 0),
         netWorth: () => {
@@ -386,15 +459,21 @@ export const useFinOS = create<FinOSState>()(
           }
 
           const desktop = isTauriDesktop();
-          set({ isDesktop: desktop, isHydrating: true });
+          set({ isDesktop: desktop, isHydrating: true, isSecurityReady: false });
 
           if (!desktop) {
-            set({ isHydrated: true, isHydrating: false });
+            set({
+              isHydrated: true,
+              isHydrating: false,
+              isSecurityReady: true,
+              securityStatus: defaultSecurityStatus,
+            });
             return;
           }
 
           try {
             const desktopSnapshot = await loadDesktopState();
+            const securityStatus = await fetchSecurityStatus();
             if (hasDesktopData(desktopSnapshot)) {
               const normalized = normalizeData(desktopSnapshot);
               const processed = processDueRecurringTemplates(normalized);
@@ -403,34 +482,137 @@ export const useFinOS = create<FinOSState>()(
                 isDesktop: true,
                 isHydrated: true,
                 isHydrating: false,
+                isSecurityReady: true,
+                securityStatus,
               });
               if (processed.generatedCount > 0) {
+                emitDesktopLog('info', 'recurring.processed', { generatedCount: processed.generatedCount });
                 await replaceDesktopState(snapshotFromState({ ...get(), ...processed.state } as FinOSState));
               }
             } else {
               await replaceDesktopState(snapshotFromState(get()));
-              set({ isDesktop: true, isHydrated: true, isHydrating: false });
+              set({
+                isDesktop: true,
+                isHydrated: true,
+                isHydrating: false,
+                isSecurityReady: true,
+                securityStatus,
+              });
             }
           } catch (error) {
             console.error('Failed to hydrate FinOS from desktop backend', error);
-            set({ isDesktop: true, isHydrated: true, isHydrating: false });
+            set({
+              isDesktop: true,
+              isHydrated: true,
+              isHydrating: false,
+              isSecurityReady: true,
+              securityStatus: defaultSecurityStatus,
+            });
           }
+        },
+
+        refreshSecurityStatus: async () => {
+          if (!get().isDesktop) {
+            set({ securityStatus: defaultSecurityStatus, isSecurityReady: true });
+            return;
+          }
+
+          const securityStatus = await fetchSecurityStatus();
+          set({ securityStatus, isSecurityReady: true });
+        },
+
+        recordSecurityActivity: async () => {
+          if (!get().isDesktop || !get().isSecurityReady || get().securityStatus.isAppLocked) {
+            return;
+          }
+
+          try {
+            const securityStatus = await touchDesktopSecurity();
+            set({ securityStatus });
+          } catch (error) {
+            console.error('Failed to record desktop security activity', error);
+          }
+        },
+
+        unlockApp: async (pin) => {
+          if (!get().isDesktop) {
+            return;
+          }
+
+          const securityStatus = await unlockDesktopApp(pin);
+          set({ securityStatus });
+        },
+
+        lockApp: async () => {
+          if (!get().isDesktop) {
+            return;
+          }
+
+          const securityStatus = await lockDesktopApp();
+          set({ securityStatus });
+        },
+
+        setAppPin: async (currentPin, newPin) => {
+          if (!get().isDesktop) {
+            return;
+          }
+
+          const securityStatus = await saveAppPin(currentPin, newPin);
+          set({ securityStatus });
+        },
+
+        unlockVault: async (password) => {
+          if (!get().isDesktop) {
+            return;
+          }
+
+          const securityStatus = await unlockDesktopVault(password);
+          set({ securityStatus });
+        },
+
+        lockVault: async () => {
+          if (!get().isDesktop) {
+            return;
+          }
+
+          const securityStatus = await lockDesktopVault();
+          set({ securityStatus });
+        },
+
+        setVaultPassword: async (currentPassword, newPassword) => {
+          if (!get().isDesktop) {
+            return;
+          }
+
+          const securityStatus = await saveVaultPassword(currentPassword, newPassword);
+          set({ securityStatus });
+        },
+
+        setAutoLockTimeout: async (timeoutSeconds) => {
+          if (!get().isDesktop) {
+            set((state) => ({
+              securityStatus: {
+                ...state.securityStatus,
+                autoLockTimeoutSeconds: timeoutSeconds,
+              },
+            }));
+            return;
+          }
+
+          const securityStatus = await saveAutoLockTimeout(timeoutSeconds);
+          set({ securityStatus });
         },
 
         updateSettings: (settings) => {
           set((state) => ({ settings: { ...state.settings, ...settings } }));
-          syncToDesktop();
+          syncToDesktop('settings.update', settings);
         },
 
         markAlertRead: (id) => {
           set((state) => ({
             alerts: state.alerts.map((alert) => (alert.id === id ? { ...alert, read: true } : alert)),
           }));
-          syncToDesktop();
-        },
-
-        toggleVaultLock: () => {
-          set((state) => ({ isVaultLocked: !state.isVaultLocked }));
+          syncToDesktop('alert.mark_read', { id });
         },
 
         addRecurringTemplate: (template) => {
@@ -439,7 +621,7 @@ export const useFinOS = create<FinOSState>()(
               left.nextDate.localeCompare(right.nextDate)
             ),
           }));
-          syncToDesktop();
+          syncToDesktop('recurring.add', { id: template.id, frequency: template.frequency });
         },
 
         updateRecurringTemplate: (id, updates) => {
@@ -448,7 +630,7 @@ export const useFinOS = create<FinOSState>()(
               .map((template) => (template.id === id ? { ...template, ...updates } : template))
               .sort((left, right) => left.nextDate.localeCompare(right.nextDate)),
           }));
-          syncToDesktop();
+          syncToDesktop('recurring.update', { id, fields: Object.keys(updates) });
         },
 
         deleteRecurringTemplate: (id) => {
@@ -457,17 +639,17 @@ export const useFinOS = create<FinOSState>()(
             transactions: state.transactions.map((transaction) =>
               transaction.recurringTemplateId === id
                 ? { ...transaction, recurringTemplateId: undefined, isRecurring: false }
-                : transaction
+              : transaction
             ),
           }));
-          syncToDesktop();
+          syncToDesktop('recurring.delete', { id });
         },
 
         processDueRecurring: () => {
           const processed = processDueRecurringTemplates(get());
           if (processed.generatedCount > 0) {
             set(processed.state);
-            syncToDesktop();
+            syncToDesktop('recurring.process_due', { generatedCount: processed.generatedCount });
           }
           return processed.generatedCount;
         },
@@ -483,7 +665,7 @@ export const useFinOS = create<FinOSState>()(
               journalEntries: [buildJournalEntry(transaction, accounts, state.categories), ...state.journalEntries],
             };
           });
-          syncToDesktop();
+          syncToDesktop('transaction.add', { id: transaction.id, type: transaction.type, amount: transaction.amount });
         },
 
         updateTransaction: (id, updates) => {
@@ -508,7 +690,7 @@ export const useFinOS = create<FinOSState>()(
               ].sort((left, right) => right.date.localeCompare(left.date)),
             };
           });
-          syncToDesktop();
+          syncToDesktop('transaction.update', { id, fields: Object.keys(updates) });
         },
 
         deleteTransaction: (id) => {
@@ -527,7 +709,7 @@ export const useFinOS = create<FinOSState>()(
               journalEntries: state.journalEntries.filter((entry) => entry.transactionId !== id),
             };
           });
-          syncToDesktop();
+          syncToDesktop('transaction.delete', { id });
         },
 
         clearTransactions: () => {
@@ -536,19 +718,19 @@ export const useFinOS = create<FinOSState>()(
             budgets: state.budgets.map((budget) => ({ ...budget, spent: 0 })),
             journalEntries: state.journalEntries.filter((entry) => !entry.transactionId),
           }));
-          syncToDesktop();
+          syncToDesktop('transaction.clear_all');
         },
 
         addAccount: (account) => {
           set((state) => ({ accounts: [...state.accounts, account] }));
-          syncToDesktop();
+          syncToDesktop('account.add', { id: account.id, type: account.type, name: account.name });
         },
 
         updateAccount: (id, updates) => {
           set((state) => ({
             accounts: state.accounts.map((account) => (account.id === id ? { ...account, ...updates } : account)),
           }));
-          syncToDesktop();
+          syncToDesktop('account.update', { id, fields: Object.keys(updates) });
         },
 
         deleteAccount: (id) => {
@@ -567,29 +749,29 @@ export const useFinOS = create<FinOSState>()(
               loans: state.loans.map((loan) => (loan.linkedAccountId === id ? { ...loan, linkedAccountId: undefined } : loan)),
             };
           });
-          syncToDesktop();
+          syncToDesktop('account.delete', { id });
         },
 
         addAsset: (asset) => {
           set((state) => ({ assets: [...state.assets, asset] }));
-          syncToDesktop();
+          syncToDesktop('asset.add', { id: asset.id, type: asset.type, name: asset.name });
         },
 
         updateAsset: (id, updates) => {
           set((state) => ({
             assets: state.assets.map((asset) => (asset.id === id ? { ...asset, ...updates } : asset)),
           }));
-          syncToDesktop();
+          syncToDesktop('asset.update', { id, fields: Object.keys(updates) });
         },
 
         deleteAsset: (id) => {
           set((state) => ({ assets: state.assets.filter((asset) => asset.id !== id) }));
-          syncToDesktop();
+          syncToDesktop('asset.delete', { id });
         },
 
         addBudget: (budget) => {
           set((state) => ({ budgets: recalculateBudgets(state.transactions, [...state.budgets, budget]) }));
-          syncToDesktop();
+          syncToDesktop('budget.add', { id: budget.id, categoryId: budget.categoryId });
         },
 
         updateBudget: (id, updates) => {
@@ -599,48 +781,48 @@ export const useFinOS = create<FinOSState>()(
               state.budgets.map((budget) => (budget.id === id ? { ...budget, ...updates } : budget))
             ),
           }));
-          syncToDesktop();
+          syncToDesktop('budget.update', { id, fields: Object.keys(updates) });
         },
 
         deleteBudget: (id) => {
           set((state) => ({ budgets: state.budgets.filter((budget) => budget.id !== id) }));
-          syncToDesktop();
+          syncToDesktop('budget.delete', { id });
         },
 
         addCategory: (category) => {
           set((state) => ({ categories: [...state.categories, category] }));
-          syncToDesktop();
+          syncToDesktop('category.add', { id: category.id, name: category.name });
         },
 
         updateCategory: (id, updates) => {
           set((state) => ({
             categories: state.categories.map((category) => (category.id === id ? { ...category, ...updates } : category)),
           }));
-          syncToDesktop();
+          syncToDesktop('category.update', { id, fields: Object.keys(updates) });
         },
 
         deleteCategory: (id) => {
           set((state) => ({
             categories: state.categories.filter((category) => category.id !== id),
           }));
-          syncToDesktop();
+          syncToDesktop('category.delete', { id });
         },
 
         addDocument: (document) => {
           set((state) => ({ documents: [document, ...state.documents] }));
-          syncToDesktop();
+          syncToDesktop('document.add', { id: document.id, category: document.category, name: document.name });
         },
 
         updateDocument: (id, updates) => {
           set((state) => ({
             documents: state.documents.map((document) => (document.id === id ? { ...document, ...updates } : document)),
           }));
-          syncToDesktop();
+          syncToDesktop('document.update', { id, fields: Object.keys(updates) });
         },
 
         deleteDocument: (id) => {
           set((state) => ({ documents: state.documents.filter((document) => document.id !== id) }));
-          syncToDesktop();
+          syncToDesktop('document.delete', { id });
         },
 
         exportAllData: () => JSON.stringify(snapshotFromState(get()), null, 2),
@@ -663,7 +845,7 @@ export const useFinOS = create<FinOSState>()(
             });
 
             set(normalized);
-            syncToDesktop();
+            syncToDesktop('data.import');
             return true;
           } catch {
             return false;
@@ -684,7 +866,7 @@ export const useFinOS = create<FinOSState>()(
             documents: [],
             alerts: [],
           });
-          syncToDesktop();
+          syncToDesktop('data.clear_all');
         },
       };
     },
@@ -702,7 +884,6 @@ export const useFinOS = create<FinOSState>()(
         journalEntries: state.journalEntries,
         documents: state.documents,
         alerts: state.alerts,
-        isVaultLocked: state.isVaultLocked,
       }),
     }
   )

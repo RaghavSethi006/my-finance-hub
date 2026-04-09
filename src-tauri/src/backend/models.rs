@@ -190,6 +190,52 @@ pub struct ImportVaultDocumentPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SecurityStatus {
+  pub has_app_pin: bool,
+  pub has_vault_password: bool,
+  pub is_app_locked: bool,
+  pub is_vault_locked: bool,
+  pub auto_lock_timeout_seconds: i64,
+  pub app_cooldown_remaining_seconds: i64,
+  pub vault_cooldown_remaining_seconds: i64,
+  pub app_failed_attempts: u32,
+  pub vault_failed_attempts: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAppPinPayload {
+  pub current_pin: Option<String>,
+  pub new_pin: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockAppPayload {
+  pub pin: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetVaultPasswordPayload {
+  pub current_password: Option<String>,
+  pub new_password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockVaultPayload {
+  pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAutoLockTimeoutPayload {
+  pub timeout_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Alert {
   pub id: String,
   #[serde(rename = "type")]

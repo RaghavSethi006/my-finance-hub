@@ -3,7 +3,7 @@ import { formatCurrency } from "@/lib/currency";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowUpRight, ArrowDownRight, Wallet, Plus, Search, Filter, X, Trash2, Edit2, Eye, EyeOff, Building2, CreditCard, TrendingUp, Bitcoin, Copy, ExternalLink, Users, Calendar, Hash, Repeat, Tags } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, Wallet, Plus, Search, Filter, X, Trash2, Edit2, Eye, EyeOff, Building2, CreditCard, TrendingUp, Bitcoin, Copy, ExternalLink, Users, Calendar, Hash, Repeat, Tags, FileText } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useState, useMemo } from "react";
-import { CURRENCY_CONFIG, Currency, TransactionType, PaymentMethod, TaxTag, AccountType, Account, Transaction, Budget, RecurringFrequency, RecurringTemplate, Category } from "@/lib/types";
+import { CURRENCY_CONFIG, Currency, TransactionType, PaymentMethod, TaxTag, AccountType, Account, Transaction, Budget, RecurringFrequency, RecurringTemplate, Category, VaultDocument } from "@/lib/types";
 import { toast } from "sonner";
 
 const ACCOUNT_TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -50,6 +50,7 @@ export default function FinancePage() {
     categories,
     budgets,
     recurringTemplates,
+    documents,
     settings,
     addRecurringTemplate,
     updateRecurringTemplate,
@@ -146,6 +147,36 @@ export default function FinancePage() {
     if (filterDateTo) txs = txs.filter(t => t.date <= filterDateTo);
     return txs;
   }, [transactions, search, filterType, filterCategory, filterAccount, filterDateFrom, filterDateTo]);
+
+  const transactionDocumentCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    documents.forEach((document) => {
+      if (document.linkedEntityType === 'transaction' && document.linkedEntityId) {
+        counts[document.linkedEntityId] = (counts[document.linkedEntityId] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [documents]);
+
+  const accountDocumentCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    documents.forEach((document) => {
+      if (document.linkedEntityType === 'account' && document.linkedEntityId) {
+        counts[document.linkedEntityId] = (counts[document.linkedEntityId] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [documents]);
+
+  const selectedAccountDocuments = useMemo(
+    () =>
+      selectedAccount
+        ? documents.filter(
+            (document) => document.linkedEntityType === 'account' && document.linkedEntityId === selectedAccount.id
+          )
+        : [],
+    [documents, selectedAccount]
+  );
 
   const clearFilters = () => {
     setSearch(''); setFilterType('all'); setFilterCategory('all'); setFilterAccount('all');
@@ -620,6 +651,7 @@ export default function FinancePage() {
                       const destinationAccount = tx.toAccountId ? accounts.find(a => a.id === tx.toAccountId) : null;
                       const isIncome = tx.type === 'income';
                       const isTransfer = tx.type === 'transfer';
+                      const linkedDocCount = transactionDocumentCounts[tx.id] || 0;
                       return (
                         <div key={tx.id} className="flex items-center justify-between px-4 py-3 hover:bg-secondary/30 transition-colors group">
                           <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -634,7 +666,7 @@ export default function FinancePage() {
                                 </p>
                               ) : (
                                 <p className="text-xs text-muted-foreground">
-                                {cat?.name} · {acc?.name} · {tx.paymentMethod} · {tx.currency}
+                                {cat?.name} / {acc?.name} / {tx.paymentMethod} / {tx.currency}
                                 </p>
                               )}
                             </div>
@@ -648,6 +680,11 @@ export default function FinancePage() {
                                 {tx.isRecurring && <Badge variant="secondary" className="text-[10px]">Recurring</Badge>}
                                 {tx.taxTag !== 'untagged' && <Badge variant="outline" className="text-[10px] capitalize">{tx.taxTag}</Badge>}
                                 {tx.isDeductible && <Badge variant="outline" className="text-[10px] text-profit border-profit/30">Deductible</Badge>}
+                                {linkedDocCount > 0 && (
+                                  <Badge variant="outline" className="text-[10px]">
+                                    {linkedDocCount} doc{linkedDocCount === 1 ? '' : 's'}
+                                  </Badge>
+                                )}
                               </div>
                             </div>
                             <div className="hidden group-hover:flex gap-1">
@@ -679,6 +716,7 @@ export default function FinancePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {accounts.map(acc => {
               const accTxCount = transactions.filter(t => t.accountId === acc.id || t.toAccountId === acc.id).length;
+              const accDocCount = accountDocumentCounts[acc.id] || 0;
               const showNum = showAccountNumbers[acc.id];
               return (
                 <Card key={acc.id} className="hover:shadow-md transition-shadow cursor-pointer group" onClick={() => { setSelectedAccount(acc); setAccDetailOpen(true); }}>
@@ -713,7 +751,10 @@ export default function FinancePage() {
                           </button>
                         )}
                       </div>
-                      <span className="text-xs text-muted-foreground">{accTxCount} txns</span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>{accTxCount} txns</span>
+                        {accDocCount > 0 && <span>{accDocCount} docs</span>}
+                      </div>
                     </div>
                     {acc.nominees && acc.nominees.length > 0 && (
                       <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
@@ -1231,6 +1272,22 @@ export default function FinancePage() {
                   <div className="col-span-2"><span className="text-xs text-muted-foreground">Notes</span><p>{selectedAccount.notes}</p></div>
                 )}
               </div>
+              {selectedAccountDocuments.length > 0 && (
+                <>
+                  <Separator />
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <FileText className="h-3.5 w-3.5" />
+                      Linked Documents
+                    </div>
+                    <div className="space-y-2">
+                      {selectedAccountDocuments.map((document) => (
+                        <LinkedDocumentRow key={document.id} document={document} />
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
               {selectedAccount.loginUrl && (
                 <Button variant="outline" size="sm" className="gap-2 w-full" onClick={() => window.open(selectedAccount.loginUrl, '_blank')}>
                   <ExternalLink className="h-3 w-3" /> Open Bank Login
@@ -1618,4 +1675,22 @@ function getDateLabel(dateStr: string): string {
   if (diffDays < 7) return `${diffDays} days ago`;
 
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: date.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
+}
+
+function LinkedDocumentRow({ document }: { document: VaultDocument }) {
+  return (
+    <div className="rounded-lg border bg-secondary/20 px-3 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{document.name}</p>
+          <p className="text-xs text-muted-foreground">
+            {document.fileType.toUpperCase()} · {document.category}
+          </p>
+        </div>
+        <Badge variant="outline" className="text-[10px]">
+          {document.updatedAt.slice(0, 10)}
+        </Badge>
+      </div>
+    </div>
+  );
 }

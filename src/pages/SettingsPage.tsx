@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Settings as SettingsIcon, User, Shield, Database, AlertTriangle, Download, Upload, FileArchive, Check } from "lucide-react";
+import { User, Shield, Database, AlertTriangle, Download, Upload, FileArchive, Lock, KeyRound } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useEffect, useRef, useState } from "react";
@@ -16,6 +16,11 @@ import type { DesktopPaths } from "@/lib/types";
 export default function SettingsPage() {
   const {
     settings,
+    securityStatus,
+    lockApp,
+    setAppPin,
+    setVaultPassword,
+    setAutoLockTimeout,
     updateSettings,
     exportAllData,
     importAllData,
@@ -31,6 +36,15 @@ export default function SettingsPage() {
   const [resetText, setResetText] = useState('');
   const [clearTxConfirm, setClearTxConfirm] = useState(false);
   const [desktopPaths, setDesktopPaths] = useState<DesktopPaths | null>(null);
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [vaultDialogOpen, setVaultDialogOpen] = useState(false);
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [currentVaultPassword, setCurrentVaultPassword] = useState('');
+  const [newVaultPassword, setNewVaultPassword] = useState('');
+  const [confirmVaultPassword, setConfirmVaultPassword] = useState('');
+  const [isSavingSecurity, setIsSavingSecurity] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -124,6 +138,68 @@ export default function SettingsPage() {
     setClearTxConfirm(false);
   };
 
+  const handleSaveAppPin = async () => {
+    if (!newPin.trim()) {
+      toast.error('Enter a new app PIN');
+      return;
+    }
+    if (newPin !== confirmPin) {
+      toast.error('App PIN entries do not match');
+      return;
+    }
+
+    setIsSavingSecurity(true);
+    try {
+      await setAppPin(securityStatus.hasAppPin ? currentPin : undefined, newPin);
+      toast.success(securityStatus.hasAppPin ? 'App PIN updated' : 'App PIN set');
+      setPinDialogOpen(false);
+      setCurrentPin('');
+      setNewPin('');
+      setConfirmPin('');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Failed to save app PIN');
+    } finally {
+      setIsSavingSecurity(false);
+    }
+  };
+
+  const handleSaveVaultPassword = async () => {
+    if (!newVaultPassword.trim()) {
+      toast.error('Enter a new vault password');
+      return;
+    }
+    if (newVaultPassword !== confirmVaultPassword) {
+      toast.error('Vault password entries do not match');
+      return;
+    }
+
+    setIsSavingSecurity(true);
+    try {
+      await setVaultPassword(securityStatus.hasVaultPassword ? currentVaultPassword : undefined, newVaultPassword);
+      toast.success(securityStatus.hasVaultPassword ? 'Vault password updated and files re-encrypted' : 'Vault password set');
+      setVaultDialogOpen(false);
+      setCurrentVaultPassword('');
+      setNewVaultPassword('');
+      setConfirmVaultPassword('');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Failed to save vault password');
+    } finally {
+      setIsSavingSecurity(false);
+    }
+  };
+
+  const handleAutoLockChange = async (value: string) => {
+    try {
+      await setAutoLockTimeout(Number(value));
+      toast.success('Auto-lock timeout updated');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update auto-lock timeout');
+    }
+  };
+
   const storageInfo = (new Blob([exportAllData()]).size / 1024).toFixed(1);
 
   return (
@@ -178,8 +254,69 @@ export default function SettingsPage() {
             <Shield className="h-4 w-4 text-muted-foreground" />
             <span className="font-medium">Security</span>
           </div>
-          <Button variant="outline" className="w-full justify-start">Change App PIN</Button>
-          <Button variant="outline" className="w-full justify-start">Change Vault Password</Button>
+          {isTauriDesktop() ? (
+            <>
+              <div className="grid gap-3 rounded-lg bg-secondary/40 p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">App lock</span>
+                  <span className="font-medium text-foreground">
+                    {securityStatus.hasAppPin ? (securityStatus.isAppLocked ? 'Locked' : 'Enabled') : 'Not set'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Vault encryption</span>
+                  <span className="font-medium text-foreground">
+                    {securityStatus.hasVaultPassword
+                      ? securityStatus.isVaultLocked
+                        ? 'Locked'
+                        : 'Unlocked'
+                      : 'Not set'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Auto-lock</span>
+                  <Select
+                    value={String(securityStatus.autoLockTimeoutSeconds)}
+                    onValueChange={(value) => void handleAutoLockChange(value)}
+                  >
+                    <SelectTrigger className="h-8 w-[160px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Disabled</SelectItem>
+                      <SelectItem value="60">1 minute</SelectItem>
+                      <SelectItem value="300">5 minutes</SelectItem>
+                      <SelectItem value="600">10 minutes</SelectItem>
+                      <SelectItem value="900">15 minutes</SelectItem>
+                      <SelectItem value="1800">30 minutes</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <Button variant="outline" className="w-full justify-start gap-2" onClick={() => setPinDialogOpen(true)}>
+                <Lock className="h-4 w-4" />
+                {securityStatus.hasAppPin ? 'Change App PIN' : 'Set App PIN'}
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full justify-start gap-2"
+                onClick={() => setVaultDialogOpen(true)}
+              >
+                <KeyRound className="h-4 w-4" />
+                {securityStatus.hasVaultPassword ? 'Change Vault Password' : 'Set Vault Password'}
+              </Button>
+              {securityStatus.hasAppPin && !securityStatus.isAppLocked && (
+                <Button variant="outline" className="w-full justify-start" onClick={() => void lockApp()}>
+                  Lock App Now
+                </Button>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Advanced security is available in the Tauri desktop app, including app PIN, vault encryption, and auto-lock.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -278,6 +415,88 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Clear Transactions Confirm */}
+      <Dialog open={pinDialogOpen} onOpenChange={setPinDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{securityStatus.hasAppPin ? 'Change App PIN' : 'Set App PIN'}</DialogTitle>
+            <DialogDescription>
+              Use a 4 to 8 digit PIN to lock the app when it auto-locks or when you lock it manually.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {securityStatus.hasAppPin && (
+              <Input
+                type="password"
+                inputMode="numeric"
+                placeholder="Current PIN"
+                value={currentPin}
+                onChange={(event) => setCurrentPin(event.target.value)}
+              />
+            )}
+            <Input
+              type="password"
+              inputMode="numeric"
+              placeholder="New PIN"
+              value={newPin}
+              onChange={(event) => setNewPin(event.target.value)}
+            />
+            <Input
+              type="password"
+              inputMode="numeric"
+              placeholder="Confirm new PIN"
+              value={confirmPin}
+              onChange={(event) => setConfirmPin(event.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPinDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => void handleSaveAppPin()} disabled={isSavingSecurity}>
+              {isSavingSecurity ? 'Saving...' : securityStatus.hasAppPin ? 'Update PIN' : 'Set PIN'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={vaultDialogOpen} onOpenChange={setVaultDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{securityStatus.hasVaultPassword ? 'Change Vault Password' : 'Set Vault Password'}</DialogTitle>
+            <DialogDescription>
+              The vault password controls AES-256 encryption for documents stored on disk.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {securityStatus.hasVaultPassword && (
+              <Input
+                type="password"
+                placeholder="Current vault password"
+                value={currentVaultPassword}
+                onChange={(event) => setCurrentVaultPassword(event.target.value)}
+              />
+            )}
+            <Input
+              type="password"
+              placeholder="New vault password"
+              value={newVaultPassword}
+              onChange={(event) => setNewVaultPassword(event.target.value)}
+            />
+            <Input
+              type="password"
+              placeholder="Confirm new vault password"
+              value={confirmVaultPassword}
+              onChange={(event) => setConfirmVaultPassword(event.target.value)}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVaultDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => void handleSaveVaultPassword()} disabled={isSavingSecurity}>
+              {isSavingSecurity ? 'Saving...' : securityStatus.hasVaultPassword ? 'Update Password' : 'Set Password'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Clear Transactions Confirm */}
       <Dialog open={clearTxConfirm} onOpenChange={setClearTxConfirm}>

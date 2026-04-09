@@ -2,10 +2,11 @@ use std::{
   env,
   fs,
   path::{Path, PathBuf},
+  sync::{Arc, Mutex},
 };
 
 use chrono::Utc;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use tauri::{AppHandle, Manager};
 
 pub const SCHEMA_SQL: &str = include_str!("../../../data/schema.sql");
@@ -15,6 +16,19 @@ pub struct AppState {
   pub data_dir: PathBuf,
   pub db_path: PathBuf,
   pub vault_dir: PathBuf,
+  pub security: Arc<Mutex<RuntimeSecurityState>>,
+}
+
+#[derive(Debug, Default)]
+pub struct RuntimeSecurityState {
+  pub app_locked: bool,
+  pub vault_locked: bool,
+  pub last_activity_at: i64,
+  pub app_failed_attempts: u32,
+  pub vault_failed_attempts: u32,
+  pub app_lockout_until: Option<i64>,
+  pub vault_lockout_until: Option<i64>,
+  pub vault_key: Option<[u8; 32]>,
 }
 
 pub fn initialize_app_state(app: &AppHandle) -> Result<AppState, String> {
@@ -31,9 +45,11 @@ pub fn initialize_app_state(app: &AppHandle) -> Result<AppState, String> {
     data_dir,
     db_path,
     vault_dir,
+    security: Arc::new(Mutex::new(RuntimeSecurityState::default())),
   };
 
   ensure_schema(&state)?;
+  initialize_runtime_security(&state)?;
   Ok(state)
 }
 
@@ -63,6 +79,10 @@ pub fn bool_to_int(value: bool) -> i64 {
 
 pub fn now_timestamp() -> String {
   Utc::now().to_rfc3339()
+}
+
+pub fn now_unix_timestamp() -> i64 {
+  Utc::now().timestamp()
 }
 
 fn resolve_data_dir(_app: &AppHandle) -> Result<PathBuf, String> {
@@ -138,5 +158,33 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), String> {
     }
   }
 
+  Ok(())
+}
+
+fn initialize_runtime_security(state: &AppState) -> Result<(), String> {
+  let conn = Connection::open(&state.db_path).map_err(|error| format!("Unable to open database: {error}"))?;
+  let row = conn
+    .query_row(
+      "SELECT app_pin_hash, vault_password_hash FROM settings WHERE id = 1",
+      [],
+      |record| {
+        Ok((
+          record.get::<_, Option<String>>(0)?,
+          record.get::<_, Option<String>>(1)?,
+        ))
+      },
+    )
+    .optional()
+    .map_err(|error| format!("Unable to load security settings: {error}"))?;
+
+  let (app_pin_hash, vault_password_hash) = row.unwrap_or((None, None));
+  let mut security = state
+    .security
+    .lock()
+    .map_err(|_| String::from("Unable to initialize security runtime"))?;
+  security.app_locked = app_pin_hash.is_some();
+  security.vault_locked = vault_password_hash.is_some();
+  security.last_activity_at = now_unix_timestamp();
+  security.vault_key = None;
   Ok(())
 }

@@ -71,7 +71,6 @@ fn clear_existing_data(transaction: &Transaction<'_>) -> Result<(), String> {
       DELETE FROM account_nominees;
       DELETE FROM accounts;
       DELETE FROM categories;
-      DELETE FROM settings;
       ",
     )
     .map_err(|error| format!("Unable to clear existing data: {error}"))?;

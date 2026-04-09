@@ -197,3 +197,15 @@ export interface DesktopPaths {
   dbPath: string;
   vaultDir: string;
 }
+
+export interface DesktopSecurityStatus {
+  hasAppPin: boolean;
+  hasVaultPassword: boolean;
+  isAppLocked: boolean;
+  isVaultLocked: boolean;
+  autoLockTimeoutSeconds: number;
+  appCooldownRemainingSeconds: number;
+  vaultCooldownRemainingSeconds: number;
+  appFailedAttempts: number;
+  vaultFailedAttempts: number;
+}
