@@ -1,4 +1,4 @@
-import type { DesktopSnapshot } from './types';
+import type { DesktopSnapshot, VaultDocument } from './types';
 
 declare global {
   interface Window {
@@ -21,4 +21,26 @@ export async function loadDesktopState(): Promise<DesktopSnapshot> {
 
 export async function replaceDesktopState(snapshot: DesktopSnapshot): Promise<void> {
   await invokeDesktop('replace_app_state', { snapshot });
+}
+
+export type ImportVaultDocumentRequest = {
+  id: string;
+  name: string;
+  category: VaultDocument['category'];
+  fileType: string;
+  size: number;
+  tags: string[];
+  linkedEntityId?: string;
+  linkedEntityType?: VaultDocument['linkedEntityType'];
+  createdAt: string;
+  updatedAt: string;
+  bytes: number[];
+};
+
+export async function importVaultDocument(payload: ImportVaultDocumentRequest): Promise<VaultDocument> {
+  return invokeDesktop<VaultDocument>('import_vault_document', { payload });
+}
+
+export async function deleteVaultDocument(documentId: string): Promise<void> {
+  await invokeDesktop('delete_vault_document', { documentId });
 }

@@ -130,6 +130,7 @@ export interface VaultDocument {
   category: DocumentCategory;
   fileType: string;
   size: number;
+  filePath?: string;
   tags: string[];
   linkedEntityId?: string;
   linkedEntityType?: 'transaction' | 'account' | 'asset';
