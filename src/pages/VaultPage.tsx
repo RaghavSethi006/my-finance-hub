@@ -1,35 +1,224 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChangeEvent, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useFinOS } from "@/lib/store";
-import { Shield, Lock, Unlock, FileText, Upload, Search, Grid3X3, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { useState } from "react";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { useFinOS } from "@/lib/store";
+import { VaultDocument } from "@/lib/types";
+import { deleteVaultDocument, importVaultDocument, isTauriDesktop } from "@/lib/desktop";
+import { FileText, Grid3X3, List, Lock, Search, Shield, Trash2, Unlock, Upload, Edit2, Download } from "lucide-react";
+import { toast } from "sonner";
 
-const FILE_ICONS: Record<string, string> = { pdf: '📄', jpg: '🖼️', png: '🖼️', docx: '📝' };
+const FILE_ICONS: Record<string, string> = {
+  pdf: "PDF",
+  jpg: "JPG",
+  jpeg: "JPG",
+  png: "PNG",
+  docx: "DOCX",
+  csv: "CSV",
+  xlsx: "XLSX",
+};
+
+function generateId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function inferFileType(file: File): string {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  return extension || file.type || "file";
+}
+
+function formatSize(size: number): string {
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(size / 1024))} KB`;
+}
 
 export default function VaultPage() {
-  const { documents, isVaultLocked, toggleVaultLock } = useFinOS();
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [search, setSearch] = useState('');
+  const { documents, isVaultLocked, toggleVaultLock, addDocument, updateDocument, deleteDocument } = useFinOS();
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [search, setSearch] = useState("");
+  const [activeCategory, setActiveCategory] = useState<"all" | VaultDocument["category"]>("all");
+  const [selectedDocument, setSelectedDocument] = useState<VaultDocument | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [passwordInput, setPasswordInput] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const filtered = documents.filter(d => d.name.toLowerCase().includes(search.toLowerCase()));
-  const categoryCounts = documents.reduce((acc, d) => { acc[d.category] = (acc[d.category] || 0) + 1; return acc; }, {} as Record<string, number>);
+  const [documentForm, setDocumentForm] = useState({
+    name: "",
+    category: "other" as VaultDocument["category"],
+    tags: "",
+  });
+
+  const filteredDocuments = useMemo(() => {
+    return documents.filter((document) => {
+      const matchesCategory = activeCategory === "all" || document.category === activeCategory;
+      const query = search.toLowerCase();
+      const matchesSearch =
+        document.name.toLowerCase().includes(query) ||
+        document.tags.some((tag) => tag.toLowerCase().includes(query)) ||
+        document.category.toLowerCase().includes(query);
+      return matchesCategory && matchesSearch;
+    });
+  }, [activeCategory, documents, search]);
+
+  const categoryCounts = documents.reduce((accumulator, document) => {
+    accumulator[document.category] = (accumulator[document.category] || 0) + 1;
+    return accumulator;
+  }, {} as Record<string, number>);
+
+  const openUploadDialog = () => fileInputRef.current?.click();
+
+  const handleSelectFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setPendingFile(file);
+    setDocumentForm({
+      name: file.name.replace(/\.[^.]+$/, ""),
+      category: "other",
+      tags: "",
+    });
+    setUploadOpen(true);
+    event.target.value = "";
+  };
+
+  const handleUpload = async () => {
+    if (!pendingFile) return;
+    if (!documentForm.name.trim()) {
+      toast.error("Document name is required");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const id = generateId("doc");
+      const now = new Date().toISOString();
+      const tags = documentForm.tags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean);
+
+      let document: VaultDocument;
+
+      if (isTauriDesktop()) {
+        const bytes = Array.from(new Uint8Array(await pendingFile.arrayBuffer()));
+        document = await importVaultDocument({
+          id,
+          name: documentForm.name.trim(),
+          category: documentForm.category,
+          fileType: inferFileType(pendingFile),
+          size: pendingFile.size,
+          tags,
+          createdAt: now,
+          updatedAt: now,
+          bytes,
+        });
+      } else {
+        document = {
+          id,
+          name: documentForm.name.trim(),
+          category: documentForm.category,
+          fileType: inferFileType(pendingFile),
+          size: pendingFile.size,
+          tags,
+          createdAt: now,
+          updatedAt: now,
+        };
+      }
+
+      addDocument(document);
+      toast.success("Document saved to the vault");
+      setUploadOpen(false);
+      setPendingFile(null);
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to save document");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const openDetails = (document: VaultDocument) => {
+    setSelectedDocument(document);
+    setDocumentForm({
+      name: document.name,
+      category: document.category,
+      tags: document.tags.join(", "),
+    });
+    setDetailOpen(true);
+  };
+
+  const handleUpdateDocument = () => {
+    if (!selectedDocument) return;
+    if (!documentForm.name.trim()) {
+      toast.error("Document name is required");
+      return;
+    }
+
+    updateDocument(selectedDocument.id, {
+      name: documentForm.name.trim(),
+      category: documentForm.category,
+      tags: documentForm.tags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+      updatedAt: new Date().toISOString(),
+    });
+    setSelectedDocument((current) =>
+      current
+        ? {
+            ...current,
+            name: documentForm.name.trim(),
+            category: documentForm.category,
+            tags: documentForm.tags
+              .split(",")
+              .map((tag) => tag.trim())
+              .filter(Boolean),
+            updatedAt: new Date().toISOString(),
+          }
+        : current
+    );
+    toast.success("Document updated");
+    setDetailOpen(false);
+  };
+
+  const handleDeleteDocument = async () => {
+    if (!selectedDocument) return;
+
+    try {
+      if (isTauriDesktop()) {
+        await deleteVaultDocument(selectedDocument.id);
+      }
+      deleteDocument(selectedDocument.id);
+      setDetailOpen(false);
+      setSelectedDocument(null);
+      toast.success("Document deleted");
+    } catch (error) {
+      console.error(error);
+      toast.error("Failed to delete document");
+    }
+  };
 
   if (isVaultLocked) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
+      <div className="flex min-h-[60vh] items-center justify-center">
         <Card className="w-full max-w-md">
-          <CardContent className="pt-8 pb-8 text-center space-y-4">
-            <div className="mx-auto h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
+          <CardContent className="space-y-4 pb-8 pt-8 text-center">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
               <Lock className="h-8 w-8 text-primary" />
             </div>
             <h2 className="text-xl font-bold">Vault is Locked</h2>
-            <p className="text-sm text-muted-foreground">Enter your master password to access encrypted documents</p>
-            <Input type="password" placeholder="Master password" className="max-w-xs mx-auto" />
+            <p className="text-sm text-muted-foreground">Unlock the vault to manage your locally stored documents.</p>
+            <Input type="password" placeholder="Master password" value={passwordInput} onChange={(event) => setPasswordInput(event.target.value)} className="mx-auto max-w-xs" />
             <Button onClick={toggleVaultLock} className="w-full max-w-xs">
-              <Unlock className="h-4 w-4 mr-2" /> Unlock Vault
+              <Unlock className="mr-2 h-4 w-4" /> Unlock Vault
             </Button>
           </CardContent>
         </Card>
@@ -38,85 +227,219 @@ export default function VaultPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="mx-auto max-w-7xl space-y-6">
+      <input ref={fileInputRef} type="file" className="hidden" onChange={handleSelectFile} />
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Secure Vault</h1>
-          <p className="text-sm text-muted-foreground">AES-256 encrypted document storage</p>
+          <p className="text-sm text-muted-foreground">Private financial document storage for your desktop app</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={toggleVaultLock} className="gap-2">
             <Lock className="h-4 w-4" /> Lock
           </Button>
-          <Button className="gap-2"><Upload className="h-4 w-4" /> Upload</Button>
+          <Button className="gap-2" onClick={openUploadDialog}>
+            <Upload className="h-4 w-4" /> Upload
+          </Button>
         </div>
       </div>
 
-      {/* Category tabs */}
       <div className="flex flex-wrap gap-2">
-        <Badge variant="secondary" className="cursor-pointer">All ({documents.length})</Badge>
-        {Object.entries(categoryCounts).map(([cat, count]) => (
-          <Badge key={cat} variant="outline" className="cursor-pointer capitalize">{cat} ({count})</Badge>
+        <Badge variant={activeCategory === "all" ? "secondary" : "outline"} className="cursor-pointer" onClick={() => setActiveCategory("all")}>
+          All ({documents.length})
+        </Badge>
+        {(["banking", "tax", "legal", "personal", "other"] as VaultDocument["category"][]).map((category) => (
+          <Badge
+            key={category}
+            variant={activeCategory === category ? "secondary" : "outline"}
+            className="cursor-pointer capitalize"
+            onClick={() => setActiveCategory(category)}
+          >
+            {category} ({categoryCounts[category] || 0})
+          </Badge>
         ))}
       </div>
 
-      {/* Search + View Toggle */}
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search documents..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input placeholder="Search documents..." className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} />
         </div>
-        <Button variant="outline" size="icon" onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}>
-          {viewMode === 'grid' ? <List className="h-4 w-4" /> : <Grid3X3 className="h-4 w-4" />}
+        <Button variant="outline" size="icon" onClick={() => setViewMode(viewMode === "grid" ? "list" : "grid")}>
+          {viewMode === "grid" ? <List className="h-4 w-4" /> : <Grid3X3 className="h-4 w-4" />}
         </Button>
       </div>
 
-      {/* Documents */}
-      {viewMode === 'grid' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map(doc => (
-            <Card key={doc.id} className="hover:shadow-md transition-shadow cursor-pointer">
+      {viewMode === "grid" ? (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {filteredDocuments.map((document) => (
+            <Card key={document.id} className="cursor-pointer transition-shadow hover:shadow-md" onClick={() => openDetails(document)}>
               <CardContent className="pt-5">
                 <div className="flex items-start gap-3">
-                  <div className="h-10 w-10 rounded-lg bg-secondary flex items-center justify-center text-lg">
-                    {FILE_ICONS[doc.fileType] || '📄'}
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary text-xs font-semibold text-muted-foreground">
+                    {FILE_ICONS[document.fileType] || "FILE"}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">{doc.name}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{doc.fileType.toUpperCase()} · {(doc.size / 1000).toFixed(0)} KB</p>
-                    <div className="flex gap-1 mt-2">
-                      <Badge variant="secondary" className="text-[10px] capitalize">{doc.category}</Badge>
-                      {doc.linkedEntityType && <Badge variant="outline" className="text-[10px]">Linked</Badge>}
+                    <p className="truncate text-sm font-medium">{document.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {document.fileType.toUpperCase()} / {formatSize(document.size)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <Badge variant="secondary" className="text-[10px] capitalize">{document.category}</Badge>
+                      {document.tags.slice(0, 2).map((tag) => (
+                        <Badge key={tag} variant="outline" className="text-[10px]">{tag}</Badge>
+                      ))}
                     </div>
                   </div>
                 </div>
               </CardContent>
             </Card>
           ))}
+          {filteredDocuments.length === 0 && (
+            <Card className="border-dashed lg:col-span-3">
+              <CardContent className="flex min-h-[220px] items-center justify-center text-center text-muted-foreground">
+                <div>
+                  <Shield className="mx-auto mb-3 h-8 w-8" />
+                  <p className="text-sm">No documents match this view yet</p>
+                  <Button variant="outline" size="sm" className="mt-3" onClick={openUploadDialog}>Upload a document</Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       ) : (
         <Card>
           <CardContent className="p-0">
             <div className="divide-y">
-              {filtered.map(doc => (
-                <div key={doc.id} className="flex items-center justify-between px-4 py-3 hover:bg-secondary/30 transition-colors cursor-pointer">
+              {filteredDocuments.map((document) => (
+                <div key={document.id} className="flex cursor-pointer items-center justify-between px-4 py-3 transition-colors hover:bg-secondary/30" onClick={() => openDetails(document)}>
                   <div className="flex items-center gap-3">
-                    <span className="text-lg">{FILE_ICONS[doc.fileType] || '📄'}</span>
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary text-[10px] font-semibold text-muted-foreground">
+                      {FILE_ICONS[document.fileType] || "FILE"}
+                    </div>
                     <div>
-                      <p className="text-sm font-medium">{doc.name}</p>
-                      <p className="text-xs text-muted-foreground">{doc.createdAt}</p>
+                      <p className="text-sm font-medium">{document.name}</p>
+                      <p className="text-xs text-muted-foreground">{document.updatedAt.slice(0, 10)}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant="secondary" className="text-[10px] capitalize">{doc.category}</Badge>
-                    <span className="text-xs text-muted-foreground">{(doc.size / 1000).toFixed(0)} KB</span>
+                    <Badge variant="secondary" className="text-[10px] capitalize">{document.category}</Badge>
+                    <span className="text-xs text-muted-foreground">{formatSize(document.size)}</span>
                   </div>
                 </div>
               ))}
+              {filteredDocuments.length === 0 && <div className="px-4 py-10 text-center text-sm text-muted-foreground">No documents found</div>}
             </div>
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Upload Document</DialogTitle>
+            <DialogDescription>{pendingFile ? `Saving ${pendingFile.name} into your local vault.` : "Choose a document to store locally."}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label className="text-xs">Document Name</Label>
+              <Input value={documentForm.name} onChange={(event) => setDocumentForm((current) => ({ ...current, name: event.target.value }))} />
+            </div>
+            <div>
+              <Label className="text-xs">Category</Label>
+              <Select value={documentForm.category} onValueChange={(value) => setDocumentForm((current) => ({ ...current, category: value as VaultDocument["category"] }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="banking">Banking</SelectItem>
+                  <SelectItem value="tax">Tax</SelectItem>
+                  <SelectItem value="legal">Legal</SelectItem>
+                  <SelectItem value="personal">Personal</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Tags</Label>
+              <Textarea value={documentForm.tags} onChange={(event) => setDocumentForm((current) => ({ ...current, tags: event.target.value }))} placeholder="Comma separated tags" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUploadOpen(false)}>Cancel</Button>
+            <Button onClick={handleUpload} disabled={isSaving || !pendingFile}>
+              <Upload className="mr-2 h-4 w-4" />
+              {isSaving ? "Saving..." : "Save Document"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{selectedDocument?.name}</DialogTitle>
+            <DialogDescription>Update metadata or remove this document from your local vault.</DialogDescription>
+          </DialogHeader>
+          {selectedDocument && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 rounded-lg bg-secondary/40 p-4 text-sm">
+                <div>
+                  <span className="text-xs text-muted-foreground">Type</span>
+                  <p className="font-medium">{selectedDocument.fileType.toUpperCase()}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-muted-foreground">Size</span>
+                  <p className="font-medium">{formatSize(selectedDocument.size)}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-muted-foreground">Created</span>
+                  <p className="font-medium">{selectedDocument.createdAt.slice(0, 10)}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-muted-foreground">Updated</span>
+                  <p className="font-medium">{selectedDocument.updatedAt.slice(0, 10)}</p>
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-xs">Document Name</Label>
+                <Input value={documentForm.name} onChange={(event) => setDocumentForm((current) => ({ ...current, name: event.target.value }))} />
+              </div>
+              <div>
+                <Label className="text-xs">Category</Label>
+                <Select value={documentForm.category} onValueChange={(value) => setDocumentForm((current) => ({ ...current, category: value as VaultDocument["category"] }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="banking">Banking</SelectItem>
+                    <SelectItem value="tax">Tax</SelectItem>
+                    <SelectItem value="legal">Legal</SelectItem>
+                    <SelectItem value="personal">Personal</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Tags</Label>
+                <Textarea value={documentForm.tags} onChange={(event) => setDocumentForm((current) => ({ ...current, tags: event.target.value }))} placeholder="Comma separated tags" />
+              </div>
+
+              <DialogFooter className="gap-2 sm:justify-between">
+                <div className="flex gap-2">
+                  <Button variant="outline" disabled className="gap-2">
+                    <Download className="h-4 w-4" /> Export Soon
+                  </Button>
+                  <Button variant="destructive" onClick={handleDeleteDocument} className="gap-2">
+                    <Trash2 className="h-4 w-4" /> Delete
+                  </Button>
+                </div>
+                <Button onClick={handleUpdateDocument} className="gap-2">
+                  <Edit2 className="h-4 w-4" /> Save Changes
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
