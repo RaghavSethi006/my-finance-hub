@@ -1,17 +1,52 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useFinOS } from "@/lib/store";
-import { formatCurrency, formatPercent } from "@/lib/currency";
-import { buildPortfolioHistory } from "@/lib/analytics";
-import { TrendingUp, TrendingDown, Plus, Bitcoin, Building2, Gem, BarChart3, Landmark, Car, PieChart as PieIcon, LineChart as LineIcon, Wallet, CreditCard, GraduationCap, Briefcase } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, AreaChart, Area, XAxis, YAxis, CartesianGrid } from "recharts";
-import { useMemo } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { buildPortfolioHistory } from "@/lib/analytics";
+import { formatCurrency, formatPercent } from "@/lib/currency";
+import { useFinOS } from "@/lib/store";
+import { Asset, AssetType, Currency, CURRENCY_CONFIG } from "@/lib/types";
+import {
+  BarChart3,
+  Bitcoin,
+  Briefcase,
+  Building2,
+  Car,
+  CreditCard,
+  Edit2,
+  Gem,
+  GraduationCap,
+  Landmark,
+  LineChart as LineIcon,
+  PieChart as PieIcon,
+  Plus,
+  TrendingDown,
+  TrendingUp,
+  Trash2,
+  Wallet,
+} from "lucide-react";
+import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { toast } from "sonner";
 
-const ASSET_COLORS = ["hsl(220, 70%, 50%)", "hsl(152, 60%, 40%)", "hsl(38, 92%, 50%)", "hsl(280, 65%, 55%)", "hsl(350, 65%, 55%)", "hsl(190, 80%, 42%)", "hsl(320, 60%, 50%)", "hsl(160, 70%, 35%)"];
+const ASSET_COLORS = [
+  "hsl(220, 70%, 50%)",
+  "hsl(152, 60%, 40%)",
+  "hsl(38, 92%, 50%)",
+  "hsl(280, 65%, 55%)",
+  "hsl(350, 65%, 55%)",
+  "hsl(190, 80%, 42%)",
+  "hsl(320, 60%, 50%)",
+  "hsl(160, 70%, 35%)",
+];
+
 const typeIcons: Record<string, React.ReactNode> = {
   stock: <BarChart3 className="h-4 w-4" />,
   mutual_fund: <LineIcon className="h-4 w-4" />,
@@ -19,7 +54,9 @@ const typeIcons: Record<string, React.ReactNode> = {
   real_estate: <Building2 className="h-4 w-4" />,
   gold: <Gem className="h-4 w-4" />,
   vehicle: <Car className="h-4 w-4" />,
+  other: <Wallet className="h-4 w-4" />,
 };
+
 const loanIcons: Record<string, React.ReactNode> = {
   home: <Building2 className="h-4 w-4" />,
   car: <Car className="h-4 w-4" />,
@@ -30,153 +67,317 @@ const loanIcons: Record<string, React.ReactNode> = {
   other: <Landmark className="h-4 w-4" />,
 };
 
+const assetTypeLabels: Record<AssetType, string> = {
+  stock: "Stock",
+  mutual_fund: "Mutual Fund",
+  crypto: "Crypto",
+  real_estate: "Real Estate",
+  vehicle: "Vehicle",
+  gold: "Gold",
+  other: "Other",
+};
+
+const initialAssetForm = {
+  name: "",
+  type: "stock" as AssetType,
+  ticker: "",
+  exchange: "",
+  quantity: "",
+  buyPrice: "",
+  currentPrice: "",
+  currency: "USD" as Currency,
+  purchaseDate: new Date().toISOString().split("T")[0],
+  fundHouse: "",
+  sipAmount: "",
+  notes: "",
+};
+
+function generateId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export default function AssetsPage() {
-  const { assets, loans, settings } = useFinOS();
+  const { assets, loans, settings, addAsset, updateAsset, deleteAsset } = useFinOS();
   const portfolioHistory = buildPortfolioHistory(assets);
-  const totalValue = useFinOS(s => s.totalPortfolioValue());
-  const totalCost = useFinOS(s => s.totalPortfolioCost());
-  const totalLoanOutstanding = useFinOS(s => s.totalLoanOutstanding());
+  const totalValue = useFinOS((state) => state.totalPortfolioValue());
+  const totalCost = useFinOS((state) => state.totalPortfolioCost());
+  const totalLoanOutstanding = useFinOS((state) => state.totalLoanOutstanding());
+
+  const [assetModalOpen, setAssetModalOpen] = useState(false);
+  const [assetDetailOpen, setAssetDetailOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
+  const [deleteAssetId, setDeleteAssetId] = useState<string | null>(null);
+  const [assetForm, setAssetForm] = useState(initialAssetForm);
+
   const totalPL = totalValue - totalCost;
   const plPercent = totalCost > 0 ? (totalPL / totalCost) * 100 : 0;
 
-  const stocks = assets.filter(a => a.type === 'stock');
-  const mutualFunds = assets.filter(a => a.type === 'mutual_fund');
-  const cryptos = assets.filter(a => a.type === 'crypto');
-  const physicalAssets = assets.filter(a => ['real_estate', 'vehicle', 'gold', 'other'].includes(a.type));
+  const stocks = assets.filter((asset) => asset.type === "stock");
+  const mutualFunds = assets.filter((asset) => asset.type === "mutual_fund");
+  const cryptos = assets.filter((asset) => asset.type === "crypto");
+  const physicalAssets = assets.filter((asset) => ["real_estate", "vehicle", "gold", "other"].includes(asset.type));
 
   const allocation = useMemo(() => {
     const groups: Record<string, number> = {};
-    assets.forEach(a => {
-      const label = a.type === 'stock' ? 'Stocks' : a.type === 'mutual_fund' ? 'Mutual Funds' : a.type === 'crypto' ? 'Crypto' : a.type === 'real_estate' ? 'Real Estate' : a.type === 'gold' ? 'Gold' : a.type === 'vehicle' ? 'Vehicles' : 'Other';
-      groups[label] = (groups[label] || 0) + a.currentPrice * a.quantity;
+    assets.forEach((asset) => {
+      const label =
+        asset.type === "stock"
+          ? "Stocks"
+          : asset.type === "mutual_fund"
+            ? "Mutual Funds"
+            : asset.type === "crypto"
+              ? "Crypto"
+              : asset.type === "real_estate"
+                ? "Real Estate"
+                : asset.type === "gold"
+                  ? "Gold"
+                  : asset.type === "vehicle"
+                    ? "Vehicles"
+                    : "Other";
+      groups[label] = (groups[label] || 0) + asset.currentPrice * asset.quantity;
     });
     return Object.entries(groups).map(([name, value]) => ({ name, value }));
   }, [assets]);
 
-  const stocksValue = stocks.reduce((s, a) => s + a.currentPrice * a.quantity, 0);
-  const stocksCost = stocks.reduce((s, a) => s + a.buyPrice * a.quantity, 0);
-  const mfValue = mutualFunds.reduce((s, a) => s + a.currentPrice * a.quantity, 0);
-  const mfCost = mutualFunds.reduce((s, a) => s + a.buyPrice * a.quantity, 0);
-  const cryptoValue = cryptos.reduce((s, a) => s + a.currentPrice * a.quantity, 0);
-  const cryptoCost = cryptos.reduce((s, a) => s + a.buyPrice * a.quantity, 0);
-  const physicalValue = physicalAssets.reduce((s, a) => s + a.currentPrice * a.quantity, 0);
-  const physicalCost = physicalAssets.reduce((s, a) => s + a.buyPrice * a.quantity, 0);
+  const stocksValue = stocks.reduce((sum, asset) => sum + asset.currentPrice * asset.quantity, 0);
+  const stocksCost = stocks.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0);
+  const mutualFundsValue = mutualFunds.reduce((sum, asset) => sum + asset.currentPrice * asset.quantity, 0);
+  const mutualFundsCost = mutualFunds.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0);
+  const cryptoValue = cryptos.reduce((sum, asset) => sum + asset.currentPrice * asset.quantity, 0);
+  const cryptoCost = cryptos.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0);
+  const physicalValue = physicalAssets.reduce((sum, asset) => sum + asset.currentPrice * asset.quantity, 0);
+  const physicalCost = physicalAssets.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0);
+  const totalEmi = loans.filter((loan) => loan.status === "active").reduce((sum, loan) => sum + loan.emi, 0);
 
-  const totalEMI = loans.filter(l => l.status === 'active').reduce((s, l) => s + l.emi, 0);
+  const openAddAsset = () => {
+    setEditingAsset(null);
+    setAssetForm({
+      ...initialAssetForm,
+      currency: settings.defaultCurrency,
+      purchaseDate: new Date().toISOString().split("T")[0],
+    });
+    setAssetModalOpen(true);
+  };
 
-  const renderAssetRow = (a: typeof assets[0]) => {
-    const val = a.currentPrice * a.quantity;
-    const cost = a.buyPrice * a.quantity;
-    const pl = val - cost;
-    const plPct = cost > 0 ? (pl / cost) * 100 : 0;
+  const openEditAsset = (asset: Asset) => {
+    setEditingAsset(asset);
+    setAssetForm({
+      name: asset.name,
+      type: asset.type,
+      ticker: asset.ticker ?? "",
+      exchange: asset.exchange ?? "",
+      quantity: asset.quantity.toString(),
+      buyPrice: asset.buyPrice.toString(),
+      currentPrice: asset.currentPrice.toString(),
+      currency: asset.currency,
+      purchaseDate: asset.purchaseDate,
+      fundHouse: asset.fundHouse ?? "",
+      sipAmount: asset.sipAmount?.toString() ?? "",
+      notes: asset.notes ?? "",
+    });
+    setAssetModalOpen(true);
+  };
+
+  const openAssetDetails = (asset: Asset) => {
+    setSelectedAsset(asset);
+    setAssetDetailOpen(true);
+  };
+
+  const openDeleteAsset = (assetId: string) => {
+    setDeleteAssetId(assetId);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleSaveAsset = () => {
+    const quantity = parseFloat(assetForm.quantity);
+    const buyPrice = parseFloat(assetForm.buyPrice);
+    const currentPrice = parseFloat(assetForm.currentPrice);
+    const sipAmount = assetForm.sipAmount ? parseFloat(assetForm.sipAmount) : undefined;
+
+    if (!assetForm.name.trim()) {
+      toast.error("Asset name is required");
+      return;
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(buyPrice) || buyPrice < 0 || !Number.isFinite(currentPrice) || currentPrice < 0) {
+      toast.error("Enter valid quantity and pricing details");
+      return;
+    }
+
+    const payload: Asset = {
+      id: editingAsset?.id ?? generateId("asset"),
+      name: assetForm.name.trim(),
+      type: assetForm.type,
+      ticker: assetForm.ticker.trim() || undefined,
+      exchange: assetForm.exchange.trim() || undefined,
+      quantity,
+      buyPrice,
+      currentPrice,
+      currency: assetForm.currency,
+      purchaseDate: assetForm.purchaseDate,
+      notes: assetForm.notes.trim() || undefined,
+      fundHouse: assetForm.type === "mutual_fund" ? assetForm.fundHouse.trim() || undefined : undefined,
+      nav: assetForm.type === "mutual_fund" ? currentPrice : undefined,
+      sipAmount: assetForm.type === "mutual_fund" && Number.isFinite(sipAmount) ? sipAmount : undefined,
+    };
+
+    if (editingAsset) {
+      updateAsset(editingAsset.id, payload);
+      if (selectedAsset?.id === editingAsset.id) {
+        setSelectedAsset(payload);
+      }
+      toast.success("Asset updated");
+    } else {
+      addAsset(payload);
+      toast.success("Asset added");
+    }
+
+    setAssetModalOpen(false);
+  };
+
+  const handleDeleteAsset = () => {
+    if (!deleteAssetId) return;
+
+    deleteAsset(deleteAssetId);
+    if (selectedAsset?.id === deleteAssetId) {
+      setSelectedAsset(null);
+      setAssetDetailOpen(false);
+    }
+    toast.success("Asset deleted");
+    setDeleteConfirmOpen(false);
+    setDeleteAssetId(null);
+  };
+
+  const renderAssetRow = (asset: Asset) => {
+    const value = asset.currentPrice * asset.quantity;
+    const cost = asset.buyPrice * asset.quantity;
+    const profitLoss = value - cost;
+    const profitLossPercent = cost > 0 ? (profitLoss / cost) * 100 : 0;
+
     return (
-      <TableRow key={a.id} className="cursor-pointer hover:bg-secondary/30">
+      <TableRow key={asset.id} className="cursor-pointer hover:bg-secondary/30" onClick={() => openAssetDetails(asset)}>
         <TableCell>
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-lg bg-secondary flex items-center justify-center text-muted-foreground">
-              {typeIcons[a.type] || <BarChart3 className="h-4 w-4" />}
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
+              {typeIcons[asset.type] || <BarChart3 className="h-4 w-4" />}
             </div>
             <div>
-              <p className="text-sm font-medium">{a.name}</p>
-              <p className="text-xs text-muted-foreground">{a.ticker && `${a.ticker}`}{a.exchange ? ` · ${a.exchange}` : ''}</p>
+              <p className="text-sm font-medium">{asset.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {asset.ticker ? asset.ticker : assetTypeLabels[asset.type]}
+                {asset.exchange ? ` / ${asset.exchange}` : ""}
+              </p>
             </div>
           </div>
         </TableCell>
-        <TableCell className="text-right font-mono text-sm">{a.quantity}{a.type === 'crypto' ? '' : ' units'}</TableCell>
-        <TableCell className="text-right font-mono text-sm">{formatCurrency(a.buyPrice, a.currency)}</TableCell>
-        <TableCell className="text-right font-mono text-sm">{formatCurrency(a.currentPrice, a.currency)}</TableCell>
-        <TableCell className="text-right font-mono text-sm">{formatCurrency(cost, a.currency)}</TableCell>
-        <TableCell className="text-right font-mono text-sm font-medium">{formatCurrency(val, a.currency)}</TableCell>
+        <TableCell className="text-right font-mono text-sm">
+          {asset.quantity}
+          {asset.type === "crypto" ? "" : " units"}
+        </TableCell>
+        <TableCell className="text-right font-mono text-sm">{formatCurrency(asset.buyPrice, asset.currency)}</TableCell>
+        <TableCell className="text-right font-mono text-sm">{formatCurrency(asset.currentPrice, asset.currency)}</TableCell>
+        <TableCell className="text-right font-mono text-sm">{formatCurrency(cost, asset.currency)}</TableCell>
+        <TableCell className="text-right font-mono text-sm font-medium">{formatCurrency(value, asset.currency)}</TableCell>
         <TableCell className="text-right">
-          <div className="flex items-center gap-1 justify-end">
-            {pl >= 0 ? <TrendingUp className="h-3 w-3 text-profit" /> : <TrendingDown className="h-3 w-3 text-loss" />}
-            <span className={`text-sm font-mono font-medium ${pl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatPercent(plPct)}</span>
+          <div className="flex items-center justify-end gap-1">
+            {profitLoss >= 0 ? <TrendingUp className="h-3 w-3 text-profit" /> : <TrendingDown className="h-3 w-3 text-loss" />}
+            <span className={`text-sm font-mono font-medium ${profitLoss >= 0 ? "text-profit" : "text-loss"}`}>
+              {formatPercent(profitLossPercent)}
+            </span>
           </div>
-          <span className={`text-xs font-mono ${pl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(pl, a.currency)}</span>
+          <span className={`text-xs font-mono ${profitLoss >= 0 ? "text-profit" : "text-loss"}`}>{formatCurrency(profitLoss, asset.currency)}</span>
         </TableCell>
       </TableRow>
     );
   };
 
-  const renderSectionSummary = (label: string, value: number, cost: number) => {
-    const pl = value - cost;
-    const pct = cost > 0 ? (pl / cost) * 100 : 0;
+  const renderSectionSummary = (value: number, cost: number) => {
+    const profitLoss = value - cost;
+    const percentage = cost > 0 ? (profitLoss / cost) * 100 : 0;
     return (
-      <div className="grid grid-cols-3 gap-4 mb-4">
-        <Card><CardContent className="pt-4 pb-3">
-          <span className="text-xs text-muted-foreground">Current Value</span>
-          <p className="text-lg font-bold font-mono mt-0.5">{formatCurrency(value, settings.defaultCurrency)}</p>
-        </CardContent></Card>
-        <Card><CardContent className="pt-4 pb-3">
-          <span className="text-xs text-muted-foreground">Invested</span>
-          <p className="text-lg font-bold font-mono mt-0.5">{formatCurrency(cost, settings.defaultCurrency)}</p>
-        </CardContent></Card>
-        <Card><CardContent className="pt-4 pb-3">
-          <span className="text-xs text-muted-foreground">P&L</span>
-          <p className={`text-lg font-bold font-mono mt-0.5 ${pl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(pl, settings.defaultCurrency)}</p>
-          <Badge className={`text-xs ${pl >= 0 ? 'bg-profit-muted text-profit' : 'bg-loss-muted text-loss'}`}>{formatPercent(pct)}</Badge>
-        </CardContent></Card>
+      <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <Card>
+          <CardContent className="pb-3 pt-4">
+            <span className="text-xs text-muted-foreground">Current Value</span>
+            <p className="mt-0.5 text-lg font-bold font-mono">{formatCurrency(value, settings.defaultCurrency)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pb-3 pt-4">
+            <span className="text-xs text-muted-foreground">Invested</span>
+            <p className="mt-0.5 text-lg font-bold font-mono">{formatCurrency(cost, settings.defaultCurrency)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pb-3 pt-4">
+            <span className="text-xs text-muted-foreground">P&amp;L</span>
+            <p className={`mt-0.5 text-lg font-bold font-mono ${profitLoss >= 0 ? "text-profit" : "text-loss"}`}>
+              {formatCurrency(profitLoss, settings.defaultCurrency)}
+            </p>
+            <Badge className={`text-xs ${profitLoss >= 0 ? "bg-profit-muted text-profit" : "bg-loss-muted text-loss"}`}>{formatPercent(percentage)}</Badge>
+          </CardContent>
+        </Card>
       </div>
     );
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="mx-auto max-w-7xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Assets & Investments</h1>
           <p className="text-sm text-muted-foreground">Complete portfolio: investments, assets, and liabilities</p>
         </div>
-        <Button className="gap-2"><Plus className="h-4 w-4" /> Add Asset</Button>
+        <Button className="gap-2" onClick={openAddAsset}>
+          <Plus className="h-4 w-4" /> Add Asset
+        </Button>
       </div>
 
       <Tabs defaultValue="overview">
-        <TabsList className="grid w-full grid-cols-6 lg:w-auto lg:inline-flex">
-          <TabsTrigger value="overview" className="gap-1.5"><PieIcon className="h-3.5 w-3.5 hidden sm:block" /> Overview</TabsTrigger>
-          <TabsTrigger value="stocks" className="gap-1.5"><BarChart3 className="h-3.5 w-3.5 hidden sm:block" /> Stocks</TabsTrigger>
-          <TabsTrigger value="mutual-funds" className="gap-1.5"><LineIcon className="h-3.5 w-3.5 hidden sm:block" /> Mutual Funds</TabsTrigger>
-          <TabsTrigger value="crypto" className="gap-1.5"><Bitcoin className="h-3.5 w-3.5 hidden sm:block" /> Crypto</TabsTrigger>
-          <TabsTrigger value="physical" className="gap-1.5"><Building2 className="h-3.5 w-3.5 hidden sm:block" /> Physical</TabsTrigger>
-          <TabsTrigger value="loans" className="gap-1.5"><Landmark className="h-3.5 w-3.5 hidden sm:block" /> Loans</TabsTrigger>
+        <TabsList className="grid w-full grid-cols-6 lg:inline-flex lg:w-auto">
+          <TabsTrigger value="overview" className="gap-1.5"><PieIcon className="hidden h-3.5 w-3.5 sm:block" /> Overview</TabsTrigger>
+          <TabsTrigger value="stocks" className="gap-1.5"><BarChart3 className="hidden h-3.5 w-3.5 sm:block" /> Stocks</TabsTrigger>
+          <TabsTrigger value="mutual-funds" className="gap-1.5"><LineIcon className="hidden h-3.5 w-3.5 sm:block" /> Mutual Funds</TabsTrigger>
+          <TabsTrigger value="crypto" className="gap-1.5"><Bitcoin className="hidden h-3.5 w-3.5 sm:block" /> Crypto</TabsTrigger>
+          <TabsTrigger value="physical" className="gap-1.5"><Building2 className="hidden h-3.5 w-3.5 sm:block" /> Physical</TabsTrigger>
+          <TabsTrigger value="loans" className="gap-1.5"><Landmark className="hidden h-3.5 w-3.5 sm:block" /> Loans</TabsTrigger>
         </TabsList>
 
-        {/* === OVERVIEW === */}
         <TabsContent value="overview" className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
             <Card>
               <CardContent className="pt-5">
                 <span className="text-xs text-muted-foreground">Total Value</span>
-                <p className="text-xl font-bold font-mono mt-1">{formatCurrency(totalValue + physicalValue, settings.defaultCurrency)}</p>
+                <p className="mt-1 text-xl font-bold font-mono">{formatCurrency(totalValue + physicalValue, settings.defaultCurrency)}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-5">
                 <span className="text-xs text-muted-foreground">Total Invested</span>
-                <p className="text-xl font-bold font-mono mt-1">{formatCurrency(totalCost + physicalCost, settings.defaultCurrency)}</p>
+                <p className="mt-1 text-xl font-bold font-mono">{formatCurrency(totalCost + physicalCost, settings.defaultCurrency)}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-5">
-                <span className="text-xs text-muted-foreground">Total P&L</span>
-                <p className={`text-xl font-bold font-mono mt-1 ${totalPL + (physicalValue - physicalCost) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                <span className="text-xs text-muted-foreground">Total P&amp;L</span>
+                <p className={`mt-1 text-xl font-bold font-mono ${totalPL + (physicalValue - physicalCost) >= 0 ? "text-profit" : "text-loss"}`}>
                   {formatCurrency(totalPL + (physicalValue - physicalCost), settings.defaultCurrency)}
                 </p>
-                <Badge className={`text-xs mt-1 ${totalPL >= 0 ? 'bg-profit-muted text-profit' : 'bg-loss-muted text-loss'}`}>
-                  {formatPercent(plPercent)}
-                </Badge>
+                <Badge className={`mt-1 text-xs ${totalPL >= 0 ? "bg-profit-muted text-profit" : "bg-loss-muted text-loss"}`}>{formatPercent(plPercent)}</Badge>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-5">
                 <span className="text-xs text-muted-foreground">Total Loans</span>
-                <p className="text-xl font-bold font-mono mt-1 text-loss">{formatCurrency(totalLoanOutstanding, settings.defaultCurrency)}</p>
-                <span className="text-xs text-muted-foreground">EMI: {formatCurrency(totalEMI, settings.defaultCurrency)}/mo</span>
+                <p className="mt-1 text-xl font-bold font-mono text-loss">{formatCurrency(totalLoanOutstanding, settings.defaultCurrency)}</p>
+                <span className="text-xs text-muted-foreground">EMI: {formatCurrency(totalEmi, settings.defaultCurrency)}/mo</span>
               </CardContent>
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            {/* Allocation Chart */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm text-muted-foreground">Asset Allocation</CardTitle>
@@ -186,29 +387,30 @@ export default function AssetsPage() {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie data={allocation} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
-                        {allocation.map((_, i) => <Cell key={i} fill={ASSET_COLORS[i % ASSET_COLORS.length]} />)}
+                        {allocation.map((_, index) => (
+                          <Cell key={index} fill={ASSET_COLORS[index % ASSET_COLORS.length]} />
+                        ))}
                       </Pie>
-                      <Tooltip formatter={(v: number) => [formatCurrency(v, settings.defaultCurrency), '']} />
+                      <Tooltip formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), ""]} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
-                <div className="space-y-1.5 mt-2">
-                  {allocation.map((item, i) => (
+                <div className="mt-2 space-y-1.5">
+                  {allocation.map((item, index) => (
                     <div key={item.name} className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2">
-                        <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ASSET_COLORS[i % ASSET_COLORS.length] }} />
+                        <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ASSET_COLORS[index % ASSET_COLORS.length] }} />
                         <span className="text-muted-foreground">{item.name}</span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono">{((item.value / (totalValue + physicalValue)) * 100).toFixed(1)}%</span>
-                      </div>
+                      <span className="font-mono">
+                        {totalValue + physicalValue > 0 ? ((item.value / (totalValue + physicalValue)) * 100).toFixed(1) : "0.0"}%
+                      </span>
                     </div>
                   ))}
                 </div>
               </CardContent>
             </Card>
 
-            {/* Portfolio Growth */}
             <Card className="lg:col-span-2">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm text-muted-foreground">Portfolio Growth</CardTitle>
@@ -228,9 +430,12 @@ export default function AssetsPage() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis dataKey="month" tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}K`} />
-                      <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} formatter={(v: number) => [formatCurrency(v, settings.defaultCurrency), '']} />
+                      <XAxis dataKey="month" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: "12px" }}
+                        formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), ""]}
+                      />
                       <Area type="monotone" dataKey="value" stroke="hsl(220, 70%, 50%)" fill="url(#portVal)" strokeWidth={2} name="Value" />
                       <Area type="monotone" dataKey="invested" stroke="hsl(152, 60%, 40%)" fill="url(#portInv)" strokeWidth={2} name="Invested" strokeDasharray="5 5" />
                     </AreaChart>
@@ -240,32 +445,33 @@ export default function AssetsPage() {
             </Card>
           </div>
 
-          {/* Category Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
             {[
-              { label: 'Stocks', value: stocksValue, cost: stocksCost, icon: <BarChart3 className="h-4 w-4" />, count: stocks.length },
-              { label: 'Mutual Funds', value: mfValue, cost: mfCost, icon: <LineIcon className="h-4 w-4" />, count: mutualFunds.length },
-              { label: 'Crypto', value: cryptoValue, cost: cryptoCost, icon: <Bitcoin className="h-4 w-4" />, count: cryptos.length },
-              { label: 'Physical', value: physicalValue, cost: physicalCost, icon: <Building2 className="h-4 w-4" />, count: physicalAssets.length },
-            ].map(cat => {
-              const pl = cat.value - cat.cost;
-              const pct = cat.cost > 0 ? (pl / cat.cost) * 100 : 0;
+              { label: "Stocks", value: stocksValue, cost: stocksCost, icon: <BarChart3 className="h-4 w-4" />, count: stocks.length },
+              { label: "Mutual Funds", value: mutualFundsValue, cost: mutualFundsCost, icon: <LineIcon className="h-4 w-4" />, count: mutualFunds.length },
+              { label: "Crypto", value: cryptoValue, cost: cryptoCost, icon: <Bitcoin className="h-4 w-4" />, count: cryptos.length },
+              { label: "Physical", value: physicalValue, cost: physicalCost, icon: <Building2 className="h-4 w-4" />, count: physicalAssets.length },
+            ].map((group) => {
+              const profitLoss = group.value - group.cost;
+              const percentage = group.cost > 0 ? (profitLoss / group.cost) * 100 : 0;
               return (
-                <Card key={cat.label}>
+                <Card key={group.label}>
                   <CardContent className="pt-5">
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="mb-2 flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="h-8 w-8 rounded-lg bg-secondary flex items-center justify-center text-muted-foreground">{cat.icon}</div>
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-secondary text-muted-foreground">{group.icon}</div>
                         <div>
-                          <span className="text-sm font-medium">{cat.label}</span>
-                          <p className="text-xs text-muted-foreground">{cat.count} holdings</p>
+                          <span className="text-sm font-medium">{group.label}</span>
+                          <p className="text-xs text-muted-foreground">{group.count} holdings</p>
                         </div>
                       </div>
                     </div>
-                    <p className="text-lg font-bold font-mono">{formatCurrency(cat.value, settings.defaultCurrency)}</p>
-                    <div className="flex items-center gap-1 mt-1">
-                      {pl >= 0 ? <TrendingUp className="h-3 w-3 text-profit" /> : <TrendingDown className="h-3 w-3 text-loss" />}
-                      <span className={`text-xs font-mono ${pl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatPercent(pct)} ({formatCurrency(pl, settings.defaultCurrency)})</span>
+                    <p className="text-lg font-bold font-mono">{formatCurrency(group.value, settings.defaultCurrency)}</p>
+                    <div className="mt-1 flex items-center gap-1">
+                      {profitLoss >= 0 ? <TrendingUp className="h-3 w-3 text-profit" /> : <TrendingDown className="h-3 w-3 text-loss" />}
+                      <span className={`text-xs font-mono ${profitLoss >= 0 ? "text-profit" : "text-loss"}`}>
+                        {formatPercent(percentage)} ({formatCurrency(profitLoss, settings.defaultCurrency)})
+                      </span>
                     </div>
                   </CardContent>
                 </Card>
@@ -274,203 +480,119 @@ export default function AssetsPage() {
           </div>
         </TabsContent>
 
-        {/* === STOCKS === */}
         <TabsContent value="stocks" className="mt-4 space-y-4">
-          {renderSectionSummary('Stocks', stocksValue, stocksCost)}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Stock Holdings</CardTitle></CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Stock</TableHead>
-                    <TableHead className="text-right">Qty</TableHead>
-                    <TableHead className="text-right">Avg Buy</TableHead>
-                    <TableHead className="text-right">Current</TableHead>
-                    <TableHead className="text-right">Invested</TableHead>
-                    <TableHead className="text-right">Value</TableHead>
-                    <TableHead className="text-right">P&L</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>{stocks.map(renderAssetRow)}</TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          {renderSectionSummary(stocksValue, stocksCost)}
+          <AssetTable title="Stock Holdings" assets={stocks} emptyLabel="No stocks yet" renderAssetRow={renderAssetRow} />
         </TabsContent>
 
-        {/* === MUTUAL FUNDS === */}
         <TabsContent value="mutual-funds" className="mt-4 space-y-4">
-          {renderSectionSummary('Mutual Funds', mfValue, mfCost)}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Mutual Fund Holdings</CardTitle></CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Fund</TableHead>
-                    <TableHead className="text-right">Units</TableHead>
-                    <TableHead className="text-right">Avg NAV</TableHead>
-                    <TableHead className="text-right">Current NAV</TableHead>
-                    <TableHead className="text-right">Invested</TableHead>
-                    <TableHead className="text-right">Value</TableHead>
-                    <TableHead className="text-right">P&L</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {mutualFunds.map(a => {
-                    const val = a.currentPrice * a.quantity;
-                    const cost = a.buyPrice * a.quantity;
-                    const pl = val - cost;
-                    const plPct = cost > 0 ? (pl / cost) * 100 : 0;
-                    return (
-                      <TableRow key={a.id} className="cursor-pointer hover:bg-secondary/30">
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <div className="h-8 w-8 rounded-lg bg-secondary flex items-center justify-center text-muted-foreground">
-                              <LineIcon className="h-4 w-4" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium">{a.name}</p>
-                              <p className="text-xs text-muted-foreground">{a.fundHouse}{a.sipAmount ? ` · SIP ${formatCurrency(a.sipAmount, a.currency)}/mo` : ''}</p>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-sm">{a.quantity}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">{formatCurrency(a.buyPrice, a.currency)}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">{formatCurrency(a.currentPrice, a.currency)}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">{formatCurrency(cost, a.currency)}</TableCell>
-                        <TableCell className="text-right font-mono text-sm font-medium">{formatCurrency(val, a.currency)}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center gap-1 justify-end">
-                            {pl >= 0 ? <TrendingUp className="h-3 w-3 text-profit" /> : <TrendingDown className="h-3 w-3 text-loss" />}
-                            <span className={`text-sm font-mono font-medium ${pl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatPercent(plPct)}</span>
-                          </div>
-                          <span className={`text-xs font-mono ${pl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(pl, a.currency)}</span>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          {renderSectionSummary(mutualFundsValue, mutualFundsCost)}
+          <AssetTable title="Mutual Fund Holdings" assets={mutualFunds} emptyLabel="No mutual funds yet" renderAssetRow={renderAssetRow} />
         </TabsContent>
 
-        {/* === CRYPTO === */}
         <TabsContent value="crypto" className="mt-4 space-y-4">
-          {renderSectionSummary('Crypto', cryptoValue, cryptoCost)}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Crypto Holdings</CardTitle></CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Coin</TableHead>
-                    <TableHead className="text-right">Holdings</TableHead>
-                    <TableHead className="text-right">Avg Buy</TableHead>
-                    <TableHead className="text-right">Current</TableHead>
-                    <TableHead className="text-right">Invested</TableHead>
-                    <TableHead className="text-right">Value</TableHead>
-                    <TableHead className="text-right">P&L</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>{cryptos.map(renderAssetRow)}</TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          {renderSectionSummary(cryptoValue, cryptoCost)}
+          <AssetTable title="Crypto Holdings" assets={cryptos} emptyLabel="No crypto assets yet" renderAssetRow={renderAssetRow} />
         </TabsContent>
 
-        {/* === PHYSICAL ASSETS === */}
         <TabsContent value="physical" className="mt-4 space-y-4">
-          {renderSectionSummary('Physical Assets', physicalValue, physicalCost)}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {physicalAssets.map(a => {
-              const val = a.currentPrice * a.quantity;
-              const cost = a.buyPrice * a.quantity;
-              const pl = val - cost;
-              const plPct = cost > 0 ? (pl / cost) * 100 : 0;
-              const isDepreciating = pl < 0;
+          {renderSectionSummary(physicalValue, physicalCost)}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {physicalAssets.map((asset) => {
+              const value = asset.currentPrice * asset.quantity;
+              const cost = asset.buyPrice * asset.quantity;
+              const profitLoss = value - cost;
+              const percentage = cost > 0 ? (profitLoss / cost) * 100 : 0;
+              const isDepreciating = profitLoss < 0;
               return (
-                <Card key={a.id} className="hover:shadow-md transition-shadow cursor-pointer">
+                <Card key={asset.id} className="cursor-pointer transition-shadow hover:shadow-md" onClick={() => openAssetDetails(asset)}>
                   <CardContent className="pt-5">
                     <div className="flex items-start gap-3">
-                      <div className="h-10 w-10 rounded-lg bg-secondary flex items-center justify-center text-muted-foreground">
-                        {typeIcons[a.type] || <BarChart3 className="h-4 w-4" />}
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
+                        {typeIcons[asset.type] || <BarChart3 className="h-4 w-4" />}
                       </div>
                       <div className="flex-1">
                         <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium">{a.name}</p>
-                          <Badge variant="secondary" className="text-[10px] capitalize">{a.type.replace('_', ' ')}</Badge>
+                          <p className="text-sm font-medium">{asset.name}</p>
+                          <Badge variant="secondary" className="text-[10px] capitalize">{asset.type.replace("_", " ")}</Badge>
                         </div>
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3">
+                        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
                           <div>
                             <span className="text-xs text-muted-foreground">Purchase Price</span>
-                            <p className="text-sm font-mono">{formatCurrency(cost, a.currency)}</p>
+                            <p className="text-sm font-mono">{formatCurrency(cost, asset.currency)}</p>
                           </div>
                           <div>
                             <span className="text-xs text-muted-foreground">Current Value</span>
-                            <p className="text-sm font-mono font-medium">{formatCurrency(val, a.currency)}</p>
+                            <p className="text-sm font-mono font-medium">{formatCurrency(value, asset.currency)}</p>
                           </div>
                           <div>
-                            <span className="text-xs text-muted-foreground">{isDepreciating ? 'Depreciation' : 'Appreciation'}</span>
-                            <p className={`text-sm font-mono ${pl >= 0 ? 'text-profit' : 'text-loss'}`}>{formatCurrency(pl, a.currency)} ({formatPercent(plPct)})</p>
+                            <span className="text-xs text-muted-foreground">{isDepreciating ? "Depreciation" : "Appreciation"}</span>
+                            <p className={`text-sm font-mono ${profitLoss >= 0 ? "text-profit" : "text-loss"}`}>
+                              {formatCurrency(profitLoss, asset.currency)} ({formatPercent(percentage)})
+                            </p>
                           </div>
                           <div>
                             <span className="text-xs text-muted-foreground">Purchased</span>
-                            <p className="text-sm">{a.purchaseDate}</p>
+                            <p className="text-sm">{asset.purchaseDate}</p>
                           </div>
                         </div>
-                        {a.notes && <p className="text-xs text-muted-foreground mt-2 italic">{a.notes}</p>}
+                        {asset.notes && <p className="mt-2 text-xs italic text-muted-foreground">{asset.notes}</p>}
                       </div>
                     </div>
                   </CardContent>
                 </Card>
               );
             })}
+            {physicalAssets.length === 0 && (
+              <Card className="border-dashed">
+                <CardContent className="flex min-h-[180px] items-center justify-center text-sm text-muted-foreground">No physical assets yet</CardContent>
+              </Card>
+            )}
           </div>
         </TabsContent>
 
-        {/* === LOANS === */}
         <TabsContent value="loans" className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <Card>
               <CardContent className="pt-5">
                 <span className="text-xs text-muted-foreground">Total Outstanding</span>
-                <p className="text-xl font-bold font-mono mt-1 text-loss">{formatCurrency(totalLoanOutstanding, settings.defaultCurrency)}</p>
+                <p className="mt-1 text-xl font-bold font-mono text-loss">{formatCurrency(totalLoanOutstanding, settings.defaultCurrency)}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-5">
                 <span className="text-xs text-muted-foreground">Monthly EMI</span>
-                <p className="text-xl font-bold font-mono mt-1">{formatCurrency(totalEMI, settings.defaultCurrency)}</p>
+                <p className="mt-1 text-xl font-bold font-mono">{formatCurrency(totalEmi, settings.defaultCurrency)}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-5">
                 <span className="text-xs text-muted-foreground">Active Loans</span>
-                <p className="text-xl font-bold font-mono mt-1">{loans.filter(l => l.status === 'active').length}</p>
+                <p className="mt-1 text-xl font-bold font-mono">{loans.filter((loan) => loan.status === "active").length}</p>
               </CardContent>
             </Card>
           </div>
 
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Loan Details</CardTitle></CardHeader>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground">Loan Details</CardTitle>
+            </CardHeader>
             <CardContent className="p-0">
               <div className="divide-y">
-                {loans.map(loan => {
+                {loans.map((loan) => {
                   const paid = loan.principalAmount - loan.outstandingAmount;
-                  const paidPct = (paid / loan.principalAmount) * 100;
+                  const paidPercentage = loan.principalAmount > 0 ? (paid / loan.principalAmount) * 100 : 0;
                   return (
-                    <div key={loan.id} className="px-4 py-4 hover:bg-secondary/30 transition-colors">
+                    <div key={loan.id} className="px-4 py-4 transition-colors hover:bg-secondary/30">
                       <div className="flex items-start gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-secondary flex items-center justify-center text-muted-foreground shrink-0">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-muted-foreground">
                           {loanIcons[loan.type] || <Landmark className="h-4 w-4" />}
                         </div>
-                        <div className="flex-1 min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between">
                             <div>
                               <p className="text-sm font-medium">{loan.name}</p>
-                              <p className="text-xs text-muted-foreground">{loan.lender} · {loan.interestRate}% APR</p>
+                              <p className="text-xs text-muted-foreground">{loan.lender} / {loan.interestRate}% APR</p>
                             </div>
                             <div className="text-right">
                               <p className="text-sm font-mono font-bold text-loss">{formatCurrency(loan.outstandingAmount, loan.currency)}</p>
@@ -478,14 +600,14 @@ export default function AssetsPage() {
                             </div>
                           </div>
                           <div className="mt-3">
-                            <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                            <div className="mb-1 flex justify-between text-xs text-muted-foreground">
                               <span>{formatCurrency(paid, loan.currency)} paid</span>
-                              <span>{paidPct.toFixed(0)}% complete</span>
+                              <span>{paidPercentage.toFixed(0)}% complete</span>
                             </div>
-                            <div className="h-2 rounded-full bg-secondary overflow-hidden">
-                              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${paidPct}%` }} />
+                            <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${paidPercentage}%` }} />
                             </div>
-                            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                            <div className="mt-1 flex justify-between text-xs text-muted-foreground">
                               <span>Start: {loan.startDate}</span>
                               <span>End: {loan.endDate}</span>
                             </div>
@@ -500,6 +622,255 @@ export default function AssetsPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={assetModalOpen} onOpenChange={setAssetModalOpen}>
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingAsset ? "Edit Asset" : "Add Asset"}</DialogTitle>
+            <DialogDescription>Capture the details you want FinOS to track for this holding.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <Label className="text-xs">Asset Name *</Label>
+                <Input value={assetForm.name} onChange={(event) => setAssetForm((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Apple Inc." />
+              </div>
+              <div>
+                <Label className="text-xs">Type</Label>
+                <Select value={assetForm.type} onValueChange={(value) => setAssetForm((current) => ({ ...current, type: value as AssetType }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(assetTypeLabels).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div>
+                <Label className="text-xs">Ticker</Label>
+                <Input value={assetForm.ticker} onChange={(event) => setAssetForm((current) => ({ ...current, ticker: event.target.value.toUpperCase() }))} placeholder="AAPL" />
+              </div>
+              <div>
+                <Label className="text-xs">Exchange</Label>
+                <Input value={assetForm.exchange} onChange={(event) => setAssetForm((current) => ({ ...current, exchange: event.target.value.toUpperCase() }))} placeholder="NASDAQ" />
+              </div>
+              <div>
+                <Label className="text-xs">Purchase Date</Label>
+                <Input type="date" value={assetForm.purchaseDate} onChange={(event) => setAssetForm((current) => ({ ...current, purchaseDate: event.target.value }))} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div>
+                <Label className="text-xs">Quantity *</Label>
+                <Input type="number" step="0.0001" value={assetForm.quantity} onChange={(event) => setAssetForm((current) => ({ ...current, quantity: event.target.value }))} />
+              </div>
+              <div>
+                <Label className="text-xs">Avg Buy *</Label>
+                <Input type="number" step="0.01" value={assetForm.buyPrice} onChange={(event) => setAssetForm((current) => ({ ...current, buyPrice: event.target.value }))} />
+              </div>
+              <div>
+                <Label className="text-xs">Current Price *</Label>
+                <Input type="number" step="0.01" value={assetForm.currentPrice} onChange={(event) => setAssetForm((current) => ({ ...current, currentPrice: event.target.value }))} />
+              </div>
+              <div>
+                <Label className="text-xs">Currency</Label>
+                <Select value={assetForm.currency} onValueChange={(value) => setAssetForm((current) => ({ ...current, currency: value as Currency }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(CURRENCY_CONFIG) as Currency[]).map((currency) => (
+                      <SelectItem key={currency} value={currency}>
+                        {CURRENCY_CONFIG[currency].symbol} {currency}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {assetForm.type === "mutual_fund" && (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <Label className="text-xs">Fund House</Label>
+                  <Input value={assetForm.fundHouse} onChange={(event) => setAssetForm((current) => ({ ...current, fundHouse: event.target.value }))} placeholder="Vanguard" />
+                </div>
+                <div>
+                  <Label className="text-xs">Monthly SIP</Label>
+                  <Input type="number" step="0.01" value={assetForm.sipAmount} onChange={(event) => setAssetForm((current) => ({ ...current, sipAmount: event.target.value }))} placeholder="Optional" />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <Label className="text-xs">Notes</Label>
+              <Textarea value={assetForm.notes} onChange={(event) => setAssetForm((current) => ({ ...current, notes: event.target.value }))} placeholder="Why you're tracking this asset, depreciation assumptions, linked docs, etc." />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAssetModalOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveAsset}>{editingAsset ? "Update" : "Add"} Asset</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={assetDetailOpen} onOpenChange={setAssetDetailOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {selectedAsset && typeIcons[selectedAsset.type]}
+              {selectedAsset?.name}
+            </DialogTitle>
+            <DialogDescription>{selectedAsset ? assetTypeLabels[selectedAsset.type] : "Asset details"}</DialogDescription>
+          </DialogHeader>
+
+          {selectedAsset && (
+            <div className="space-y-4">
+              <div className="text-center">
+                <p className="text-3xl font-bold font-mono">{formatCurrency(selectedAsset.currentPrice * selectedAsset.quantity, selectedAsset.currency)}</p>
+                <Badge variant="outline" className="mt-1">{selectedAsset.currency}</Badge>
+              </div>
+
+              <Separator />
+
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-xs text-muted-foreground">Quantity</span>
+                  <p className="font-mono">{selectedAsset.quantity}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-muted-foreground">Current Price</span>
+                  <p className="font-mono">{formatCurrency(selectedAsset.currentPrice, selectedAsset.currency)}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-muted-foreground">Avg Buy</span>
+                  <p className="font-mono">{formatCurrency(selectedAsset.buyPrice, selectedAsset.currency)}</p>
+                </div>
+                <div>
+                  <span className="text-xs text-muted-foreground">Purchase Date</span>
+                  <p>{selectedAsset.purchaseDate}</p>
+                </div>
+                {selectedAsset.ticker && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Ticker</span>
+                    <p className="font-mono">{selectedAsset.ticker}</p>
+                  </div>
+                )}
+                {selectedAsset.exchange && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Exchange</span>
+                    <p>{selectedAsset.exchange}</p>
+                  </div>
+                )}
+                {selectedAsset.fundHouse && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Fund House</span>
+                    <p>{selectedAsset.fundHouse}</p>
+                  </div>
+                )}
+                {selectedAsset.sipAmount && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Monthly SIP</span>
+                    <p className="font-mono">{formatCurrency(selectedAsset.sipAmount, selectedAsset.currency)}</p>
+                  </div>
+                )}
+              </div>
+
+              {selectedAsset.notes && (
+                <>
+                  <Separator />
+                  <div>
+                    <span className="text-xs text-muted-foreground">Notes</span>
+                    <p className="mt-1 text-sm">{selectedAsset.notes}</p>
+                  </div>
+                </>
+              )}
+
+              <Separator />
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1 gap-1"
+                  onClick={() => {
+                    setAssetDetailOpen(false);
+                    openEditAsset(selectedAsset);
+                  }}
+                >
+                  <Edit2 className="h-3 w-3" /> Edit
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="gap-1"
+                  onClick={() => {
+                    setAssetDetailOpen(false);
+                    openDeleteAsset(selectedAsset.id);
+                  }}
+                >
+                  <Trash2 className="h-3 w-3" /> Delete
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete Asset?</DialogTitle>
+            <DialogDescription>This removes the asset from your portfolio history in FinOS. This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteAsset}>Delete Asset</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+function AssetTable({
+  title,
+  assets,
+  emptyLabel,
+  renderAssetRow,
+}: {
+  title: string;
+  assets: Asset[];
+  emptyLabel: string;
+  renderAssetRow: (asset: Asset) => React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm text-muted-foreground">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        {assets.length > 0 ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Asset</TableHead>
+                <TableHead className="text-right">Qty</TableHead>
+                <TableHead className="text-right">Avg Buy</TableHead>
+                <TableHead className="text-right">Current</TableHead>
+                <TableHead className="text-right">Invested</TableHead>
+                <TableHead className="text-right">Value</TableHead>
+                <TableHead className="text-right">P&amp;L</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>{assets.map(renderAssetRow)}</TableBody>
+          </Table>
+        ) : (
+          <div className="px-6 py-12 text-center text-sm text-muted-foreground">{emptyLabel}</div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
