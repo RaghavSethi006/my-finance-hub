@@ -1,4 +1,4 @@
-import { Account, Transaction, Category, Budget, Asset, VaultDocument, Alert, Loan, JournalEntry } from './types';
+import { Account, Transaction, Category, Budget, Asset, VaultDocument, Alert, Loan, JournalEntry, RecurringTemplate } from './types';
 
 export const sampleAccounts: Account[] = [
   { id: 'acc-1', name: 'Main Checking', type: 'bank', balance: 12450.80, currency: 'USD', color: 'hsl(220 70% 50%)', icon: 'building-2', createdAt: '2024-01-01', bankName: 'Chase Bank', accountNumber: '****4521', ifscCode: 'CHASUS33', branchName: 'Downtown Manhattan', nominees: ['Jane Doe'], loginUrl: 'https://chase.com', notes: 'Primary checking account', isActive: true },
@@ -58,6 +58,13 @@ export const sampleBudgets: Budget[] = [
   { id: 'bud-3', categoryId: 'cat-4', amount: 200, currency: 'USD', spent: 65, alertThreshold: 80, period: 'monthly' },
   { id: 'bud-4', categoryId: 'cat-6', amount: 400, currency: 'USD', spent: 290, alertThreshold: 80, period: 'monthly' },
   { id: 'bud-5', categoryId: 'cat-7', amount: 250, currency: 'USD', spent: 150, alertThreshold: 80, period: 'monthly' },
+];
+
+export const sampleRecurringTemplates: RecurringTemplate[] = [
+  { id: 'rt-1', amount: 7500, type: 'income', categoryId: 'cat-8', accountId: 'acc-1', note: 'Monthly salary', paymentMethod: 'netbanking', currency: 'USD', taxTag: 'personal', isDeductible: false, frequency: 'monthly', nextDate: d(-29), isPaused: false, createdAt: '2024-01-01', updatedAt: '2024-01-01' },
+  { id: 'rt-2', amount: 1800, type: 'expense', categoryId: 'cat-2', accountId: 'acc-1', note: 'Monthly rent', paymentMethod: 'netbanking', currency: 'USD', taxTag: 'personal', isDeductible: false, frequency: 'monthly', nextDate: d(-27), isPaused: false, createdAt: '2024-01-01', updatedAt: '2024-01-01' },
+  { id: 'rt-3', amount: 65, type: 'expense', categoryId: 'cat-4', accountId: 'acc-3', note: 'Netflix + Spotify', paymentMethod: 'card', currency: 'USD', taxTag: 'personal', isDeductible: false, frequency: 'monthly', nextDate: d(-12), isPaused: false, createdAt: '2024-02-01', updatedAt: '2024-02-01' },
+  { id: 'rt-4', amount: 42, type: 'expense', categoryId: 'cat-12', accountId: 'acc-3', note: 'GitHub Pro + Figma', paymentMethod: 'card', currency: 'USD', taxTag: 'business', isDeductible: true, frequency: 'monthly', nextDate: d(-10), isPaused: false, createdAt: '2024-03-01', updatedAt: '2024-03-01' },
 ];
 
 export const sampleAssets: Asset[] = [

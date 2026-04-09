@@ -90,6 +90,28 @@ pub struct Budget {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RecurringTemplate {
+  pub id: String,
+  pub amount: f64,
+  #[serde(rename = "type")]
+  pub template_type: String,
+  pub category_id: String,
+  pub account_id: String,
+  pub to_account_id: Option<String>,
+  pub note: String,
+  pub payment_method: String,
+  pub currency: String,
+  pub tax_tag: String,
+  pub is_deductible: bool,
+  pub frequency: String,
+  pub next_date: String,
+  pub is_paused: bool,
+  pub created_at: String,
+  pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Asset {
   pub id: String,
   pub name: String,
@@ -201,6 +223,7 @@ pub struct AppSnapshot {
   pub settings: UserSettings,
   pub accounts: Vec<Account>,
   pub transactions: Vec<TransactionRecord>,
+  pub recurring_templates: Vec<RecurringTemplate>,
   pub categories: Vec<Category>,
   pub budgets: Vec<Budget>,
   pub assets: Vec<Asset>,
@@ -432,6 +455,39 @@ fn load_snapshot(conn: &Connection) -> Result<AppSnapshot, String> {
     .collect::<Result<Vec<_>, _>>()
     .map_err(|error| format!("Unable to collect transactions: {error}"))?;
 
+  let mut recurring_stmt = conn
+    .prepare(
+      "SELECT id, amount, type, category_id, account_id, to_account_id, note, payment_method, currency, tax_tag, is_deductible, frequency, next_date, is_paused, created_at, updated_at
+       FROM recurring_templates
+       ORDER BY next_date ASC, created_at ASC",
+    )
+    .map_err(|error| format!("Unable to prepare recurring templates query: {error}"))?;
+
+  let recurring_templates = recurring_stmt
+    .query_map([], |row| {
+      Ok(RecurringTemplate {
+        id: row.get(0)?,
+        amount: row.get(1)?,
+        template_type: row.get(2)?,
+        category_id: row.get(3)?,
+        account_id: row.get(4)?,
+        to_account_id: row.get(5)?,
+        note: row.get(6)?,
+        payment_method: row.get(7)?,
+        currency: row.get(8)?,
+        tax_tag: row.get(9)?,
+        is_deductible: row.get::<_, i64>(10)? != 0,
+        frequency: row.get(11)?,
+        next_date: row.get(12)?,
+        is_paused: row.get::<_, i64>(13)? != 0,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+      })
+    })
+    .map_err(|error| format!("Unable to load recurring templates: {error}"))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| format!("Unable to collect recurring templates: {error}"))?;
+
   let mut budgets_stmt = conn
     .prepare("SELECT id, category_id, amount, currency, spent, alert_threshold, period FROM budgets ORDER BY created_at ASC")
     .map_err(|error| format!("Unable to prepare budgets query: {error}"))?;
@@ -611,6 +667,7 @@ fn load_snapshot(conn: &Connection) -> Result<AppSnapshot, String> {
     settings,
     accounts,
     transactions,
+    recurring_templates,
     categories,
     budgets,
     assets,
@@ -630,6 +687,7 @@ fn replace_snapshot(conn: &mut Connection, snapshot: &AppSnapshot) -> Result<(),
   insert_settings(&transaction, &snapshot.settings)?;
   insert_categories(&transaction, &snapshot.categories)?;
   insert_accounts(&transaction, &snapshot.accounts)?;
+  insert_recurring_templates(&transaction, &snapshot.recurring_templates)?;
   insert_transactions(&transaction, &snapshot.transactions)?;
   insert_budgets(&transaction, &snapshot.budgets)?;
   insert_assets(&transaction, &snapshot.assets)?;
@@ -659,6 +717,7 @@ fn clear_existing_data(transaction: &Transaction<'_>) -> Result<(), String> {
       DELETE FROM assets;
       DELETE FROM budgets;
       DELETE FROM transactions;
+      DELETE FROM recurring_templates;
       DELETE FROM account_nominees;
       DELETE FROM accounts;
       DELETE FROM categories;
@@ -764,6 +823,36 @@ fn insert_transactions(transaction: &Transaction<'_>, transactions: &[Transactio
         ],
       )
       .map_err(|error| format!("Unable to store transaction {}: {error}", record.id))?;
+  }
+  Ok(())
+}
+
+fn insert_recurring_templates(transaction: &Transaction<'_>, recurring_templates: &[RecurringTemplate]) -> Result<(), String> {
+  for template in recurring_templates {
+    transaction
+      .execute(
+        "INSERT INTO recurring_templates (id, amount, type, category_id, account_id, to_account_id, note, payment_method, currency, tax_tag, is_deductible, frequency, next_date, is_paused, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![
+          template.id,
+          template.amount,
+          template.template_type,
+          template.category_id,
+          template.account_id,
+          template.to_account_id,
+          template.note,
+          template.payment_method,
+          template.currency,
+          template.tax_tag,
+          bool_to_int(template.is_deductible),
+          template.frequency,
+          template.next_date,
+          bool_to_int(template.is_paused),
+          template.created_at,
+          template.updated_at
+        ],
+      )
+      .map_err(|error| format!("Unable to store recurring template {}: {error}", template.id))?;
   }
   Ok(())
 }

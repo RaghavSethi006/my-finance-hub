@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useState, useMemo } from "react";
-import { CURRENCY_CONFIG, Currency, TransactionType, PaymentMethod, TaxTag, AccountType, Account, Transaction, Budget } from "@/lib/types";
+import { CURRENCY_CONFIG, Currency, TransactionType, PaymentMethod, TaxTag, AccountType, Account, Transaction, Budget, RecurringFrequency, RecurringTemplate } from "@/lib/types";
 import { toast } from "sonner";
 
 const ACCOUNT_TYPE_ICONS: Record<string, React.ReactNode> = {
@@ -27,13 +27,33 @@ function generateId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function advanceRecurringDate(date: string, frequency: RecurringFrequency): string {
+  const next = new Date(`${date}T00:00:00`);
+
+  if (frequency === 'daily') {
+    next.setDate(next.getDate() + 1);
+  } else if (frequency === 'weekly') {
+    next.setDate(next.getDate() + 7);
+  } else if (frequency === 'monthly') {
+    next.setMonth(next.getMonth() + 1);
+  } else {
+    next.setFullYear(next.getFullYear() + 1);
+  }
+
+  return next.toISOString().split('T')[0];
+}
+
 export default function FinancePage() {
   const {
     transactions,
     accounts,
     categories,
     budgets,
+    recurringTemplates,
     settings,
+    addRecurringTemplate,
+    updateRecurringTemplate,
+    deleteRecurringTemplate,
     addTransaction,
     updateTransaction,
     deleteTransaction,
@@ -71,7 +91,7 @@ export default function FinancePage() {
   const [txForm, setTxForm] = useState({
     amount: '', type: 'expense' as TransactionType, categoryId: '', accountId: '', toAccountId: '',
     date: new Date().toISOString().split('T')[0], note: '', paymentMethod: 'card' as PaymentMethod,
-    currency: settings.defaultCurrency as Currency, taxTag: 'untagged' as TaxTag, isDeductible: false, isRecurring: false,
+    currency: settings.defaultCurrency as Currency, taxTag: 'untagged' as TaxTag, isDeductible: false, isRecurring: false, frequency: 'monthly' as RecurringFrequency,
   });
 
   // Account form state
@@ -110,19 +130,38 @@ export default function FinancePage() {
     setTxForm({
       amount: '', type: 'expense', categoryId: categories.find(c => c.type === 'expense')?.id || '',
       accountId: accounts[0]?.id || '', toAccountId: accounts[1]?.id || '', date: new Date().toISOString().split('T')[0], note: '',
-      paymentMethod: 'card', currency: settings.defaultCurrency, taxTag: 'untagged', isDeductible: false, isRecurring: false,
+      paymentMethod: 'card', currency: settings.defaultCurrency, taxTag: 'untagged', isDeductible: false, isRecurring: false, frequency: 'monthly',
     });
     setTxModalOpen(true);
   };
   const openEditTx = (tx: Transaction) => {
+    const recurringTemplate = tx.recurringTemplateId ? recurringTemplates.find((template) => template.id === tx.recurringTemplateId) : undefined;
     setEditingTx(tx);
     setTxForm({
       amount: tx.amount.toString(), type: tx.type, categoryId: tx.categoryId, accountId: tx.accountId, toAccountId: tx.toAccountId || '',
       date: tx.date, note: tx.note, paymentMethod: tx.paymentMethod, currency: tx.currency,
-      taxTag: tx.taxTag, isDeductible: tx.isDeductible, isRecurring: tx.isRecurring,
+      taxTag: tx.taxTag, isDeductible: tx.isDeductible, isRecurring: tx.isRecurring, frequency: recurringTemplate?.frequency || 'monthly',
     });
     setTxModalOpen(true);
   };
+  const buildRecurringTemplate = (templateId: string, createdAt: string): RecurringTemplate => ({
+    id: templateId,
+    amount: parseFloat(txForm.amount),
+    type: txForm.type,
+    categoryId: txForm.categoryId,
+    accountId: txForm.accountId,
+    toAccountId: txForm.type === 'transfer' ? txForm.toAccountId || undefined : undefined,
+    note: txForm.note.trim(),
+    paymentMethod: txForm.paymentMethod,
+    currency: txForm.currency,
+    taxTag: txForm.taxTag,
+    isDeductible: txForm.isDeductible,
+    frequency: txForm.frequency,
+    nextDate: advanceRecurringDate(txForm.date, txForm.frequency),
+    isPaused: false,
+    createdAt,
+    updatedAt: new Date().toISOString(),
+  });
   const saveTx = () => {
     const amount = parseFloat(txForm.amount);
     if (!amount || amount <= 0 || !txForm.note.trim()) { toast.error('Please fill all required fields'); return; }
@@ -131,11 +170,43 @@ export default function FinancePage() {
       if (!txForm.toAccountId) { toast.error('Select a destination account'); return; }
       if (txForm.toAccountId === txForm.accountId) { toast.error('Transfer accounts must be different'); return; }
     }
+    const existingTemplate = editingTx?.recurringTemplateId
+      ? recurringTemplates.find((template) => template.id === editingTx.recurringTemplateId)
+      : undefined;
+    const recurringTemplateId = txForm.isRecurring ? (existingTemplate?.id || generateId()) : undefined;
+    const transactionPayload = {
+      amount,
+      type: txForm.type,
+      categoryId: txForm.categoryId,
+      accountId: txForm.accountId,
+      toAccountId: txForm.type === 'transfer' ? txForm.toAccountId : undefined,
+      date: txForm.date,
+      note: txForm.note.trim(),
+      paymentMethod: txForm.paymentMethod,
+      currency: txForm.currency,
+      taxTag: txForm.taxTag,
+      isDeductible: txForm.isDeductible,
+      isRecurring: txForm.isRecurring,
+      recurringTemplateId,
+    };
     if (editingTx) {
-      updateTransaction(editingTx.id, { ...txForm, amount });
+      updateTransaction(editingTx.id, transactionPayload);
+      if (!txForm.isRecurring && existingTemplate) {
+        deleteRecurringTemplate(existingTemplate.id);
+      } else if (txForm.isRecurring && recurringTemplateId) {
+        const template = buildRecurringTemplate(recurringTemplateId, existingTemplate?.createdAt || new Date().toISOString());
+        if (existingTemplate) {
+          updateRecurringTemplate(recurringTemplateId, template);
+        } else {
+          addRecurringTemplate(template);
+        }
+      }
       toast.success('Transaction updated');
     } else {
-      addTransaction({ id: generateId(), ...txForm, amount });
+      addTransaction({ id: generateId(), ...transactionPayload });
+      if (txForm.isRecurring && recurringTemplateId) {
+        addRecurringTemplate(buildRecurringTemplate(recurringTemplateId, new Date().toISOString()));
+      }
       toast.success('Transaction added');
     }
     setTxModalOpen(false);
@@ -633,6 +704,23 @@ export default function FinancePage() {
                 </label>
               </div>
             </div>
+            {txForm.isRecurring && (
+              <div>
+                <Label className="text-xs">Recurring Frequency</Label>
+                <Select value={txForm.frequency} onValueChange={v => setTxForm(f => ({ ...f, frequency: v as RecurringFrequency }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                    <SelectItem value="yearly">Yearly</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  The next scheduled entry will be created for {advanceRecurringDate(txForm.date, txForm.frequency)}.
+                </p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setTxModalOpen(false)}>Cancel</Button>

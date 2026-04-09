@@ -19,6 +19,7 @@ export type AssetType = 'stock' | 'mutual_fund' | 'crypto' | 'real_estate' | 've
 export type DocumentCategory = 'banking' | 'tax' | 'legal' | 'personal' | 'other';
 export type TaxTag = 'business' | 'personal' | 'untagged';
 export type LoanStatus = 'active' | 'paid_off' | 'defaulted';
+export type RecurringFrequency = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 export interface Account {
   id: string;
@@ -73,6 +74,25 @@ export interface Budget {
   spent: number;
   alertThreshold: number;
   period: 'monthly';
+}
+
+export interface RecurringTemplate {
+  id: string;
+  amount: number;
+  type: TransactionType;
+  categoryId: string;
+  accountId: string;
+  toAccountId?: string;
+  note: string;
+  paymentMethod: PaymentMethod;
+  currency: Currency;
+  taxTag: TaxTag;
+  isDeductible: boolean;
+  frequency: RecurringFrequency;
+  nextDate: string;
+  isPaused: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Asset {
@@ -162,6 +182,7 @@ export interface DesktopSnapshot {
   settings: UserSettings;
   accounts: Account[];
   transactions: Transaction[];
+  recurringTemplates: RecurringTemplate[];
   categories: Category[];
   budgets: Budget[];
   assets: Asset[];

@@ -46,7 +46,7 @@ const ASSET_COLORS = [
 ];
 
 export default function Dashboard() {
-  const { settings, accounts, transactions, assets, budgets, alerts, documents, categories } = useFinOS();
+  const { settings, accounts, transactions, assets, budgets, alerts, documents, categories, recurringTemplates } = useFinOS();
   const netWorth = useFinOS((state) => state.netWorth());
   const portfolioValue = useFinOS((state) => state.totalPortfolioValue());
   const portfolioCost = useFinOS((state) => state.totalPortfolioCost());
@@ -345,13 +345,13 @@ export default function Dashboard() {
               <Clock className="h-4 w-4 text-muted-foreground" />
               <span className="text-sm font-medium text-muted-foreground">Recurring</span>
             </div>
-            <p className="text-lg font-bold">{transactions.filter((transaction) => transaction.isRecurring).length} active</p>
-            <p className="mt-1 text-xs text-muted-foreground">Auto-tracked monthly</p>
+            <p className="text-lg font-bold">{recurringTemplates.filter((template) => !template.isPaused).length} active</p>
+            <p className="mt-1 text-xs text-muted-foreground">Desktop-scheduled templates</p>
             <div className="mt-3 space-y-1.5">
-              {transactions.filter((transaction) => transaction.isRecurring).slice(0, 2).map((transaction) => (
-                <div key={transaction.id} className="flex items-center justify-between text-xs">
-                  <span className="truncate text-muted-foreground">{transaction.note}</span>
-                  <span className="font-mono">{formatCurrency(transaction.amount, transaction.currency)}</span>
+              {recurringTemplates.filter((template) => !template.isPaused).slice(0, 2).map((template) => (
+                <div key={template.id} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="truncate text-muted-foreground">{template.note}</span>
+                  <span className="shrink-0 font-mono">{formatCurrency(template.amount, template.currency)}</span>
                 </div>
               ))}
             </div>

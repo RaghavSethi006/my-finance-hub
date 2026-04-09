@@ -11,6 +11,7 @@ import type {
   JournalEntry,
   JournalEntryLine,
   Loan,
+  RecurringTemplate,
   Transaction,
   UserSettings,
   VaultDocument,
@@ -24,6 +25,7 @@ import {
   sampleDocuments,
   sampleJournalEntries,
   sampleLoans,
+  sampleRecurringTemplates,
   sampleTransactions,
 } from './sample-data';
 import { isTauriDesktop, loadDesktopState, replaceDesktopState } from './desktop';
@@ -49,6 +51,10 @@ interface FinOSState extends SerializableFinOSState {
   updateSettings: (s: Partial<UserSettings>) => void;
   markAlertRead: (id: string) => void;
   toggleVaultLock: () => void;
+  addRecurringTemplate: (template: RecurringTemplate) => void;
+  updateRecurringTemplate: (id: string, updates: Partial<RecurringTemplate>) => void;
+  deleteRecurringTemplate: (id: string) => void;
+  processDueRecurring: () => number;
   addTransaction: (tx: Transaction) => void;
   updateTransaction: (id: string, updates: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
@@ -82,6 +88,7 @@ const initialData = (): SerializableFinOSState => ({
   settings: defaultSettings,
   accounts: sampleAccounts,
   transactions: sampleTransactions,
+  recurringTemplates: sampleRecurringTemplates,
   categories: sampleCategories,
   budgets: recalculateBudgets(sampleTransactions, sampleBudgets),
   assets: sampleAssets,
@@ -99,6 +106,48 @@ function cloneData<T>(value: T): T {
 function getCurrentMonthPrefix(): string {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function isoDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function advanceRecurringDate(date: string, frequency: RecurringTemplate['frequency']): string {
+  const next = new Date(`${date}T00:00:00`);
+
+  if (frequency === 'daily') {
+    next.setDate(next.getDate() + 1);
+  } else if (frequency === 'weekly') {
+    next.setDate(next.getDate() + 7);
+  } else if (frequency === 'monthly') {
+    next.setMonth(next.getMonth() + 1);
+  } else {
+    next.setFullYear(next.getFullYear() + 1);
+  }
+
+  return isoDate(next);
+}
+
+function buildRecurringTransaction(template: RecurringTemplate, date: string, index: number): Transaction {
+  return {
+    id: `${template.id}-${date}-${index}`,
+    amount: template.amount,
+    type: template.type,
+    categoryId: template.categoryId,
+    accountId: template.accountId,
+    toAccountId: template.toAccountId,
+    date,
+    note: template.note,
+    paymentMethod: template.paymentMethod,
+    currency: template.currency,
+    taxTag: template.taxTag,
+    isDeductible: template.isDeductible,
+    isRecurring: true,
+    recurringTemplateId: template.id,
+  };
 }
 
 function accountLedgerType(accountType: AccountType): JournalEntryLine['accountType'] {
@@ -185,6 +234,56 @@ function recalculateBudgets(transactions: Transaction[], budgets: Budget[]): Bud
   }));
 }
 
+function processDueRecurringTemplates(data: SerializableFinOSState): { state: SerializableFinOSState; generatedCount: number } {
+  const today = isoDate(new Date());
+  let generatedCount = 0;
+  let accounts = [...data.accounts];
+  let transactions = [...data.transactions];
+  let journalEntries = [...data.journalEntries];
+
+  const recurringTemplates = data.recurringTemplates.map((template) => {
+    if (template.isPaused) {
+      return template;
+    }
+
+    let nextDate = template.nextDate;
+    let iteration = 0;
+
+    while (nextDate <= today) {
+      const alreadyGenerated = transactions.some(
+        (transaction) => transaction.recurringTemplateId === template.id && transaction.date === nextDate
+      );
+
+      if (!alreadyGenerated) {
+        const recurringTransaction = buildRecurringTransaction(template, nextDate, iteration);
+        accounts = applyTransactionImpact(accounts, recurringTransaction, 1);
+        transactions = [recurringTransaction, ...transactions];
+        journalEntries = [buildJournalEntry(recurringTransaction, accounts, data.categories), ...journalEntries];
+        generatedCount += 1;
+      }
+
+      nextDate = advanceRecurringDate(nextDate, template.frequency);
+      iteration += 1;
+    }
+
+    return nextDate === template.nextDate
+      ? template
+      : { ...template, nextDate, updatedAt: new Date().toISOString() };
+  });
+
+  return {
+    generatedCount,
+    state: {
+      ...data,
+      accounts,
+      transactions: [...transactions].sort((left, right) => right.date.localeCompare(left.date)),
+      recurringTemplates,
+      budgets: recalculateBudgets(transactions, data.budgets),
+      journalEntries: [...journalEntries].sort((left, right) => right.date.localeCompare(left.date)),
+    },
+  };
+}
+
 function normalizeData(data: DesktopSnapshot): SerializableFinOSState {
   const categories = data.categories.length > 0 ? data.categories : cloneData(sampleCategories);
   const budgets = recalculateBudgets(data.transactions, data.budgets);
@@ -196,6 +295,7 @@ function normalizeData(data: DesktopSnapshot): SerializableFinOSState {
   return {
     ...data,
     categories,
+    recurringTemplates: data.recurringTemplates ?? [],
     budgets,
     journalEntries,
     isVaultLocked: true,
@@ -207,6 +307,7 @@ function snapshotFromState(state: FinOSState): DesktopSnapshot {
     settings: state.settings,
     accounts: state.accounts,
     transactions: state.transactions,
+    recurringTemplates: state.recurringTemplates,
     categories: state.categories,
     budgets: state.budgets,
     assets: state.assets,
@@ -221,6 +322,7 @@ function hasDesktopData(snapshot: DesktopSnapshot): boolean {
   return (
     snapshot.accounts.length > 0 ||
     snapshot.transactions.length > 0 ||
+    snapshot.recurringTemplates.length > 0 ||
     snapshot.assets.length > 0 ||
     snapshot.loans.length > 0 ||
     snapshot.documents.length > 0 ||
@@ -292,12 +394,17 @@ export const useFinOS = create<FinOSState>()(
           try {
             const desktopSnapshot = await loadDesktopState();
             if (hasDesktopData(desktopSnapshot)) {
+              const normalized = normalizeData(desktopSnapshot);
+              const processed = processDueRecurringTemplates(normalized);
               set({
-                ...normalizeData(desktopSnapshot),
+                ...processed.state,
                 isDesktop: true,
                 isHydrated: true,
                 isHydrating: false,
               });
+              if (processed.generatedCount > 0) {
+                await replaceDesktopState(snapshotFromState({ ...get(), ...processed.state } as FinOSState));
+              }
             } else {
               await replaceDesktopState(snapshotFromState(get()));
               set({ isDesktop: true, isHydrated: true, isHydrating: false });
@@ -322,6 +429,45 @@ export const useFinOS = create<FinOSState>()(
 
         toggleVaultLock: () => {
           set((state) => ({ isVaultLocked: !state.isVaultLocked }));
+        },
+
+        addRecurringTemplate: (template) => {
+          set((state) => ({
+            recurringTemplates: [...state.recurringTemplates, template].sort((left, right) =>
+              left.nextDate.localeCompare(right.nextDate)
+            ),
+          }));
+          syncToDesktop();
+        },
+
+        updateRecurringTemplate: (id, updates) => {
+          set((state) => ({
+            recurringTemplates: state.recurringTemplates
+              .map((template) => (template.id === id ? { ...template, ...updates } : template))
+              .sort((left, right) => left.nextDate.localeCompare(right.nextDate)),
+          }));
+          syncToDesktop();
+        },
+
+        deleteRecurringTemplate: (id) => {
+          set((state) => ({
+            recurringTemplates: state.recurringTemplates.filter((template) => template.id !== id),
+            transactions: state.transactions.map((transaction) =>
+              transaction.recurringTemplateId === id
+                ? { ...transaction, recurringTemplateId: undefined, isRecurring: false }
+                : transaction
+            ),
+          }));
+          syncToDesktop();
+        },
+
+        processDueRecurring: () => {
+          const processed = processDueRecurringTemplates(get());
+          if (processed.generatedCount > 0) {
+            set(processed.state);
+            syncToDesktop();
+          }
+          return processed.generatedCount;
         },
 
         addTransaction: (transaction) => {
@@ -490,6 +636,7 @@ export const useFinOS = create<FinOSState>()(
               settings: data.settings ?? defaultSettings,
               accounts: data.accounts ?? [],
               transactions: data.transactions ?? [],
+              recurringTemplates: data.recurringTemplates ?? [],
               categories: data.categories ?? cloneData(sampleCategories),
               budgets: data.budgets ?? [],
               assets: data.assets ?? [],
@@ -513,6 +660,7 @@ export const useFinOS = create<FinOSState>()(
             ...cloneData(reset),
             accounts: [],
             transactions: [],
+            recurringTemplates: [],
             budgets: recalculateBudgets([], reset.budgets),
             assets: [],
             loans: [],
@@ -530,6 +678,7 @@ export const useFinOS = create<FinOSState>()(
         settings: state.settings,
         accounts: state.accounts,
         transactions: state.transactions,
+        recurringTemplates: state.recurringTemplates,
         categories: state.categories,
         budgets: state.budgets,
         assets: state.assets,
