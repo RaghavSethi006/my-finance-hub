@@ -129,6 +129,9 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/assets?action=add-asset")}>
             <Plus className="mr-2 h-4 w-4" /> Add Asset
           </CommandItem>
+          <CommandItem onSelect={() => go("/assets?action=import-csv")}>
+            <FileArchive className="mr-2 h-4 w-4" /> Import Asset CSV
+          </CommandItem>
           <CommandItem onSelect={() => go("/vault?action=upload")}>
             <FileText className="mr-2 h-4 w-4" /> Upload Document
           </CommandItem>

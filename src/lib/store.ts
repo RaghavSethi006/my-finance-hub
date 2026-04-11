@@ -101,6 +101,7 @@ interface FinOSState extends SerializableFinOSState {
   updateAccount: (id: string, updates: Partial<Account>) => void;
   deleteAccount: (id: string) => void;
   addAsset: (a: Asset) => void;
+  importAssets: (assets: Asset[]) => void;
   updateAsset: (id: string, updates: Partial<Asset>) => void;
   deleteAsset: (id: string) => void;
   addBudget: (b: Budget) => void;
@@ -802,6 +803,11 @@ export const useFinOS = create<FinOSState>()(
         addAsset: (asset) => {
           set((state) => ({ assets: [...state.assets, asset] }));
           syncToDesktop('asset.add', { id: asset.id, type: asset.type, name: asset.name });
+        },
+
+        importAssets: (assets) => {
+          set((state) => ({ assets: [...state.assets, ...assets] }));
+          syncToDesktop('asset.import_csv', { count: assets.length });
         },
 
         updateAsset: (id, updates) => {

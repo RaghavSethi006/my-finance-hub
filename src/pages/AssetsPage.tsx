@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { buildPortfolioHistory } from "@/lib/analytics";
+import { parseAssetCsv } from "@/lib/asset-import";
 import { formatCurrency, formatPercent } from "@/lib/currency";
 import { useFinOS } from "@/lib/store";
 import { Asset, AssetType, Currency, CURRENCY_CONFIG, VaultDocument } from "@/lib/types";
@@ -32,6 +33,7 @@ import {
   TrendingDown,
   TrendingUp,
   Trash2,
+  Upload,
   Wallet,
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -100,7 +102,7 @@ function generateId(prefix: string) {
 
 export default function AssetsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { assets, loans, documents, settings, addAsset, updateAsset, deleteAsset } = useFinOS();
+  const { assets, loans, documents, settings, addAsset, importAssets, updateAsset, deleteAsset } = useFinOS();
   const portfolioHistory = buildPortfolioHistory(assets);
   const totalValue = useFinOS((state) => state.totalPortfolioValue());
   const totalCost = useFinOS((state) => state.totalPortfolioCost());
@@ -114,6 +116,7 @@ export default function AssetsPage() {
   const [deleteAssetId, setDeleteAssetId] = useState<string | null>(null);
   const [assetForm, setAssetForm] = useState(initialAssetForm);
   const [activeTab, setActiveTab] = useState<string>(() => searchParams.get("tab") || "overview");
+  const csvImportRef = useRef<HTMLInputElement>(null);
 
   const totalPL = totalValue - totalCost;
   const plPercent = totalCost > 0 ? (totalPL / totalCost) * 100 : 0;
@@ -231,6 +234,11 @@ export default function AssetsPage() {
 
     if (action === "add-asset") {
       openAddAsset();
+      return;
+    }
+
+    if (action === "import-csv") {
+      csvImportRef.current?.click();
     }
   }, [searchParams, setSearchParams]);
 
@@ -292,6 +300,44 @@ export default function AssetsPage() {
     toast.success("Asset deleted");
     setDeleteConfirmOpen(false);
     setDeleteAssetId(null);
+  };
+
+  const handleImportCsv = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      const csvText = typeof loadEvent.target?.result === "string" ? loadEvent.target.result : "";
+      const result = parseAssetCsv(csvText, settings.defaultCurrency);
+
+      if (result.assets.length === 0) {
+        toast.error(result.errors[0] ?? "No valid asset rows were found in the CSV file");
+        return;
+      }
+
+      const importedAssets: Asset[] = result.assets.map((asset, index) => ({
+        ...asset,
+        id: generateId(`asset-import-${index}`),
+      }));
+
+      importAssets(importedAssets);
+
+      if (result.errors.length > 0) {
+        toast.warning(`Imported ${result.assets.length} assets. Skipped ${result.errors.length} row${result.errors.length === 1 ? "" : "s"}.`);
+      } else {
+        toast.success(`Imported ${result.assets.length} asset${result.assets.length === 1 ? "" : "s"} from CSV`);
+      }
+    };
+
+    reader.onerror = () => {
+      toast.error("Unable to read the selected CSV file");
+    };
+
+    reader.readAsText(file);
+    event.target.value = "";
   };
 
   const renderAssetRow = (asset: Asset) => {
@@ -371,14 +417,20 @@ export default function AssetsPage() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
+      <input ref={csvImportRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportCsv} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Assets & Investments</h1>
           <p className="text-sm text-muted-foreground">Complete portfolio: investments, assets, and liabilities</p>
         </div>
-        <Button className="gap-2" onClick={openAddAsset}>
-          <Plus className="h-4 w-4" /> Add Asset
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" className="gap-2" onClick={() => csvImportRef.current?.click()}>
+            <Upload className="h-4 w-4" /> Import CSV
+          </Button>
+          <Button className="gap-2" onClick={openAddAsset}>
+            <Plus className="h-4 w-4" /> Add Asset
+          </Button>
+        </div>
       </div>
 
       <Tabs
