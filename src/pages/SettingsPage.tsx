@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { getDesktopPaths, isTauriDesktop } from "@/lib/desktop";
+import { exportEncryptedBackup, getDesktopPaths, isTauriDesktop } from "@/lib/desktop";
 import type { DesktopPaths } from "@/lib/types";
 import { useSearchParams } from "react-router-dom";
 
@@ -40,6 +40,7 @@ export default function SettingsPage() {
   const [desktopPaths, setDesktopPaths] = useState<DesktopPaths | null>(null);
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
   const [vaultDialogOpen, setVaultDialogOpen] = useState(false);
+  const [backupDialogOpen, setBackupDialogOpen] = useState(false);
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -47,6 +48,9 @@ export default function SettingsPage() {
   const [newVaultPassword, setNewVaultPassword] = useState('');
   const [confirmVaultPassword, setConfirmVaultPassword] = useState('');
   const [isSavingSecurity, setIsSavingSecurity] = useState(false);
+  const [backupPassword, setBackupPassword] = useState('');
+  const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -78,6 +82,11 @@ export default function SettingsPage() {
 
     if (action === 'vault-password') {
       setVaultDialogOpen(true);
+      return;
+    }
+
+    if (action === 'encrypted-backup') {
+      setBackupDialogOpen(true);
     }
   }, [searchParams, setSearchParams]);
 
@@ -219,6 +228,43 @@ export default function SettingsPage() {
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Failed to update auto-lock timeout');
+    }
+  };
+
+  const handleExportEncryptedBackup = async () => {
+    if (!backupPassword.trim()) {
+      toast.error('Enter a password for the encrypted backup');
+      return;
+    }
+    if (backupPassword.trim().length < 8) {
+      toast.error('Backup password must be at least 8 characters long');
+      return;
+    }
+    if (backupPassword !== confirmBackupPassword) {
+      toast.error('Backup password entries do not match');
+      return;
+    }
+
+    setIsExportingBackup(true);
+    try {
+      const encryptedBytes = await exportEncryptedBackup(backupPassword);
+      const blob = new Blob([Uint8Array.from(encryptedBytes)], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `finos-encrypted-backup-${new Date().toISOString().split('T')[0]}.zip.enc`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      toast.success('Encrypted backup exported');
+      setBackupDialogOpen(false);
+      setBackupPassword('');
+      setConfirmBackupPassword('');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Failed to export encrypted backup');
+    } finally {
+      setIsExportingBackup(false);
     }
   };
 
@@ -380,8 +426,16 @@ export default function SettingsPage() {
               <Button variant="outline" size="sm" className="gap-2" onClick={handleExportCSV}>
                 <FileArchive className="h-3.5 w-3.5" /> Export CSV Files
               </Button>
+              {isTauriDesktop() && (
+                <Button variant="outline" size="sm" className="gap-2" onClick={() => setBackupDialogOpen(true)}>
+                  <Lock className="h-3.5 w-3.5" /> Export Encrypted Backup
+                </Button>
+              )}
             </div>
-            <p className="text-xs text-muted-foreground mt-1">JSON includes all data. CSV exports separate files for accounts, transactions, assets & loans.</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              JSON includes all data. CSV exports separate files for accounts, transactions, assets and loans.
+              {isTauriDesktop() ? ' Encrypted backup bundles snapshot data and vault documents into one password-protected archive.' : ''}
+            </p>
           </div>
 
           <Separator />
@@ -515,6 +569,40 @@ export default function SettingsPage() {
             <Button variant="outline" onClick={() => setVaultDialogOpen(false)}>Cancel</Button>
             <Button onClick={() => void handleSaveVaultPassword()} disabled={isSavingSecurity}>
               {isSavingSecurity ? 'Saving...' : securityStatus.hasVaultPassword ? 'Update Password' : 'Set Password'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={backupDialogOpen} onOpenChange={setBackupDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Export Encrypted Backup</DialogTitle>
+            <DialogDescription>
+              Create a password-protected archive that includes your app snapshot and vault documents for secure offline backup.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              type="password"
+              placeholder="Backup password"
+              value={backupPassword}
+              onChange={(event) => setBackupPassword(event.target.value)}
+            />
+            <Input
+              type="password"
+              placeholder="Confirm backup password"
+              value={confirmBackupPassword}
+              onChange={(event) => setConfirmBackupPassword(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Keep this password safe. It will be required to decrypt the exported archive later.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBackupDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => void handleExportEncryptedBackup()} disabled={isExportingBackup}>
+              {isExportingBackup ? 'Exporting...' : 'Export Backup'}
             </Button>
           </DialogFooter>
         </DialogContent>

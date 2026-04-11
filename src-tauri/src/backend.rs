@@ -11,6 +11,7 @@ mod vault;
 
 pub use commands::{
   delete_vault_document,
+  export_encrypted_backup,
   get_desktop_paths,
   get_security_status,
   import_vault_document,

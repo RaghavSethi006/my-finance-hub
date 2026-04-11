@@ -1,11 +1,15 @@
+use std::io::{Cursor, Write};
+
 use log::{debug, error, info, warn};
 use rusqlite::Connection;
 use tauri::State;
+use zip::{write::FileOptions, CompressionMethod, ZipWriter};
 
 use super::{
   models::{
     AppSnapshot,
     DesktopPaths,
+    ExportEncryptedBackupPayload,
     ImportVaultDocumentPayload,
     SecurityStatus,
     SetAppPinPayload,
@@ -292,6 +296,20 @@ pub fn log_frontend_event(level: String, action: String, details: Option<String>
   Ok(())
 }
 
+#[tauri::command]
+pub fn export_encrypted_backup(
+  payload: ExportEncryptedBackupPayload,
+  state: State<'_, AppState>,
+) -> Result<Vec<u8>, String> {
+  info!("export_encrypted_backup requested");
+  let conn = open_connection(&state)?;
+  let snapshot = load_snapshot(&conn)?;
+  let archive = build_backup_archive(&conn, &state, snapshot)?;
+  let encrypted = security::encrypt_backup_bytes(&payload.password, &archive)?;
+  info!("export_encrypted_backup succeeded bytes={}", encrypted.len());
+  Ok(encrypted)
+}
+
 fn summarize_snapshot(snapshot: &AppSnapshot) -> String {
   format!(
     "accounts={} transactions={} recurring={} assets={} loans={} documents={} alerts={}",
@@ -303,4 +321,60 @@ fn summarize_snapshot(snapshot: &AppSnapshot) -> String {
     snapshot.documents.len(),
     snapshot.alerts.len()
   )
+}
+
+fn build_backup_archive(conn: &Connection, state: &AppState, snapshot: AppSnapshot) -> Result<Vec<u8>, String> {
+  let cursor = Cursor::new(Vec::<u8>::new());
+  let mut zip = ZipWriter::new(cursor);
+  let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+
+  let sanitized_snapshot = sanitize_snapshot_for_backup(snapshot);
+  let snapshot_json = serde_json::to_vec_pretty(&sanitized_snapshot)
+    .map_err(|error| format!("Unable to serialize backup snapshot: {error}"))?;
+  let manifest_json = serde_json::to_vec_pretty(&serde_json::json!({
+    "format": "finos-encrypted-backup",
+    "version": 1,
+    "exportedAt": chrono::Utc::now().to_rfc3339(),
+    "documentCount": sanitized_snapshot.documents.len(),
+  }))
+  .map_err(|error| format!("Unable to serialize backup manifest: {error}"))?;
+
+  zip
+    .start_file("manifest.json", options)
+    .map_err(|error| format!("Unable to start backup manifest: {error}"))?;
+  zip
+    .write_all(&manifest_json)
+    .map_err(|error| format!("Unable to write backup manifest: {error}"))?;
+
+  zip
+    .start_file("snapshot.json", options)
+    .map_err(|error| format!("Unable to start backup snapshot: {error}"))?;
+  zip
+    .write_all(&snapshot_json)
+    .map_err(|error| format!("Unable to write backup snapshot: {error}"))?;
+
+  for document in &sanitized_snapshot.documents {
+    let extension = document.file_type.to_lowercase();
+    let bytes = vault::read_vault_document(conn, state, &document.id)
+      .map_err(|error| format!("Unable to include document {} in encrypted backup: {error}", document.name))?;
+    let entry_name = format!("vault/{}.{}", document.id, extension);
+    zip
+      .start_file(entry_name, options)
+      .map_err(|error| format!("Unable to start backup file for {}: {error}", document.name))?;
+    zip
+      .write_all(&bytes)
+      .map_err(|error| format!("Unable to write backup file for {}: {error}", document.name))?;
+  }
+
+  zip
+    .finish()
+    .map_err(|error| format!("Unable to finish encrypted backup archive: {error}"))
+    .map(|cursor| cursor.into_inner())
+}
+
+fn sanitize_snapshot_for_backup(mut snapshot: AppSnapshot) -> AppSnapshot {
+  for document in &mut snapshot.documents {
+    document.file_path = None;
+  }
+  snapshot
 }

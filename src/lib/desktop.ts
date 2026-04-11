@@ -70,6 +70,14 @@ export async function readVaultDocument(documentId: string): Promise<number[]> {
   return invokeDesktop<number[]>('read_vault_document', { documentId });
 }
 
+export async function exportEncryptedBackup(password: string): Promise<number[]> {
+  return invokeDesktop<number[]>('export_encrypted_backup', {
+    payload: {
+      password,
+    },
+  });
+}
+
 export async function getSecurityStatus(): Promise<DesktopSecurityStatus> {
   return invokeDesktop<DesktopSecurityStatus>('get_security_status');
 }

@@ -14,6 +14,7 @@ import {
   Bitcoin,
   BookOpen,
   Calculator,
+  FileArchive,
   FileKey,
   FileLock2,
   FileText,
@@ -43,7 +44,7 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const alerts = useFinOS((state) => state.alerts);
-  const recentDocuments = useFinOS((state) => state.documents.slice(0, 3));
+  const documents = useFinOS((state) => state.documents);
   const isDesktop = useFinOS((state) => state.isDesktop);
   const securityStatus = useFinOS((state) => state.securityStatus);
   const lockApp = useFinOS((state) => state.lockApp);
@@ -84,6 +85,7 @@ export function CommandPalette() {
     () => alerts.filter((alert) => !alert.read).slice(0, 4),
     [alerts]
   );
+  const recentDocuments = useMemo(() => documents.slice(0, 3), [documents]);
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
@@ -136,6 +138,11 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/settings?action=vault-password")}>
             <FileKey className="mr-2 h-4 w-4" /> Change Vault Password
           </CommandItem>
+          {isDesktop && (
+            <CommandItem onSelect={() => go("/settings?action=encrypted-backup")}>
+              <FileArchive className="mr-2 h-4 w-4" /> Export Encrypted Backup
+            </CommandItem>
+          )}
           {isDesktop && securityStatus.hasAppPin && !securityStatus.isAppLocked && (
             <CommandItem onSelect={() => void runAction(lockApp)}>
               <Lock className="mr-2 h-4 w-4" /> Lock App Now

@@ -236,6 +236,12 @@ pub struct SetAutoLockTimeoutPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExportEncryptedBackupPayload {
+  pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Alert {
   pub id: String,
   #[serde(rename = "type")]
