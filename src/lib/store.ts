@@ -5,6 +5,7 @@ import type {
   AccountType,
   Alert,
   Asset,
+  AssetValueLog,
   Budget,
   Category,
   Currency,
@@ -101,6 +102,7 @@ interface FinOSState extends SerializableFinOSState {
   updateAccount: (id: string, updates: Partial<Account>) => void;
   deleteAccount: (id: string) => void;
   addAsset: (a: Asset) => void;
+  addAssetValueLog: (assetId: string, log: Omit<AssetValueLog, 'id'> & { id?: string }) => void;
   importAssets: (assets: Asset[]) => void;
   updateAsset: (id: string, updates: Partial<Asset>) => void;
   deleteAsset: (id: string) => void;
@@ -141,6 +143,63 @@ const initialData = (): SerializableFinOSState => ({
 
 function cloneData<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildAssetValueLog(
+  date: string,
+  price: number,
+  source: AssetValueLog['source'],
+  note?: string,
+  id = `asset-log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+): AssetValueLog {
+  return {
+    id,
+    date,
+    price,
+    note,
+    source,
+  };
+}
+
+function normalizeAssetValueLogs(asset: Asset): AssetValueLog[] {
+  const normalizedLogs = [...(asset.valueLogs ?? [])]
+    .filter((log) => Number.isFinite(log.price) && !!log.date)
+    .sort((left, right) => left.date.localeCompare(right.date));
+
+  if (normalizedLogs.length > 0) {
+    return normalizedLogs;
+  }
+
+  const logs: AssetValueLog[] = [buildAssetValueLog(asset.purchaseDate, asset.buyPrice, 'import', 'Initial purchase')];
+  const today = isoDate(new Date());
+  if (asset.currentPrice !== asset.buyPrice || asset.purchaseDate !== today) {
+    logs.push(buildAssetValueLog(today, asset.currentPrice, 'system', 'Current value snapshot'));
+  }
+  return logs;
+}
+
+function normalizeAsset(asset: Asset): Asset {
+  return {
+    ...asset,
+    valueLogs: normalizeAssetValueLogs(asset),
+    salvageValue: typeof asset.salvageValue === 'number' ? asset.salvageValue : 0,
+  };
+}
+
+function appendValueLogIfNeeded(asset: Asset, nextCurrentPrice: number): Asset {
+  const valueLogs = normalizeAssetValueLogs(asset);
+  const today = isoDate(new Date());
+  const lastLog = valueLogs[valueLogs.length - 1];
+
+  if (lastLog?.date === today && lastLog.price === nextCurrentPrice) {
+    return { ...asset, currentPrice: nextCurrentPrice, valueLogs };
+  }
+
+  return {
+    ...asset,
+    currentPrice: nextCurrentPrice,
+    valueLogs: [...valueLogs, buildAssetValueLog(today, nextCurrentPrice, 'system', 'Updated current price')],
+  };
 }
 
 function getCurrentMonthPrefix(): string {
@@ -327,6 +386,7 @@ function processDueRecurringTemplates(data: SerializableFinOSState): { state: Se
 function normalizeData(data: DesktopSnapshot): SerializableFinOSState {
   const categories = data.categories.length > 0 ? data.categories : cloneData(sampleCategories);
   const budgets = recalculateBudgets(data.transactions, data.budgets);
+  const assets = data.assets.map(normalizeAsset);
   const journalEntries =
     data.journalEntries.length > 0
       ? data.journalEntries
@@ -337,6 +397,7 @@ function normalizeData(data: DesktopSnapshot): SerializableFinOSState {
     categories,
     recurringTemplates: data.recurringTemplates ?? [],
     budgets,
+    assets,
     journalEntries,
   };
 }
@@ -801,18 +862,49 @@ export const useFinOS = create<FinOSState>()(
         },
 
         addAsset: (asset) => {
-          set((state) => ({ assets: [...state.assets, asset] }));
+          const normalizedAsset = normalizeAsset(asset);
+          set((state) => ({ assets: [...state.assets, normalizedAsset] }));
           syncToDesktop('asset.add', { id: asset.id, type: asset.type, name: asset.name });
         },
 
+        addAssetValueLog: (assetId, log) => {
+          set((state) => ({
+            assets: state.assets.map((asset) => {
+              if (asset.id !== assetId) {
+                return asset;
+              }
+
+              const valueLog = buildAssetValueLog(log.date, log.price, log.source, log.note, log.id);
+              const nextLogs = [...normalizeAssetValueLogs(asset), valueLog].sort((left, right) => left.date.localeCompare(right.date));
+              return {
+                ...asset,
+                currentPrice: valueLog.price,
+                valueLogs: nextLogs,
+              };
+            }),
+          }));
+          syncToDesktop('asset.value_log.add', { assetId, date: log.date, price: log.price, source: log.source });
+        },
+
         importAssets: (assets) => {
-          set((state) => ({ assets: [...state.assets, ...assets] }));
+          set((state) => ({ assets: [...state.assets, ...assets.map(normalizeAsset)] }));
           syncToDesktop('asset.import_csv', { count: assets.length });
         },
 
         updateAsset: (id, updates) => {
           set((state) => ({
-            assets: state.assets.map((asset) => (asset.id === id ? { ...asset, ...updates } : asset)),
+            assets: state.assets.map((asset) => {
+              if (asset.id !== id) {
+                return asset;
+              }
+
+              const mergedAsset = normalizeAsset({ ...asset, ...updates });
+              if (typeof updates.currentPrice === 'number' && updates.currentPrice !== asset.currentPrice) {
+                return appendValueLogIfNeeded(mergedAsset, updates.currentPrice);
+              }
+
+              return mergedAsset;
+            }),
           }));
           syncToDesktop('asset.update', { id, fields: Object.keys(updates) });
         },

@@ -48,10 +48,20 @@ type LinkedSummary = {
   detail: string;
 };
 
+type UploadLinkPrefill = {
+  linkedEntityType: "none" | LinkedEntityType;
+  linkedEntityId: string;
+};
+
 const EMPTY_DOCUMENT_FORM: DocumentFormState = {
   name: "",
   category: "other",
   tags: "",
+  linkedEntityType: "none",
+  linkedEntityId: "",
+};
+
+const EMPTY_UPLOAD_LINK_PREFILL: UploadLinkPrefill = {
   linkedEntityType: "none",
   linkedEntityId: "",
 };
@@ -173,6 +183,7 @@ export default function VaultPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [documentForm, setDocumentForm] = useState<DocumentFormState>({ ...EMPTY_DOCUMENT_FORM });
+  const [uploadLinkPrefill, setUploadLinkPrefill] = useState<UploadLinkPrefill>({ ...EMPTY_UPLOAD_LINK_PREFILL });
 
   const linkOptions = useMemo<Record<LinkedEntityType, LinkOption[]>>(
     () => ({
@@ -262,14 +273,32 @@ export default function VaultPage() {
     [linkOptions, selectedDocument]
   );
 
+  const uploadPrefillSummary = useMemo(() => {
+    if (uploadLinkPrefill.linkedEntityType === "none" || !uploadLinkPrefill.linkedEntityId) {
+      return null;
+    }
+
+    const linkedOption = linkOptions[uploadLinkPrefill.linkedEntityType].find((option) => option.id === uploadLinkPrefill.linkedEntityId);
+    return linkedOption
+      ? {
+          typeLabel: getLinkedTypeLabel(uploadLinkPrefill.linkedEntityType),
+          ...linkedOption,
+        }
+      : null;
+  }, [linkOptions, uploadLinkPrefill]);
+
   const isVaultLocked = securityStatus.isVaultLocked;
   const hasVaultPassword = securityStatus.hasVaultPassword;
 
-  const openUploadDialog = () => fileInputRef.current?.click();
+  const openUploadDialog = () => {
+    setUploadLinkPrefill({ ...EMPTY_UPLOAD_LINK_PREFILL });
+    fileInputRef.current?.click();
+  };
 
   const resetUploadState = () => {
     setPendingFile(null);
     setDocumentForm({ ...EMPTY_DOCUMENT_FORM });
+    setUploadLinkPrefill({ ...EMPTY_UPLOAD_LINK_PREFILL });
     setUploadOpen(false);
   };
 
@@ -289,6 +318,8 @@ export default function VaultPage() {
     setPendingFile(file);
     setDocumentForm({
       ...EMPTY_DOCUMENT_FORM,
+      linkedEntityType: uploadLinkPrefill.linkedEntityType,
+      linkedEntityId: uploadLinkPrefill.linkedEntityId,
       name: file.name.replace(/\.[^.]+$/, ""),
     });
     setUploadOpen(true);
@@ -421,12 +452,26 @@ export default function VaultPage() {
 
   useEffect(() => {
     const action = searchParams.get("action");
-    if (!action) {
+    const linkedType = searchParams.get("linkedType");
+    const linkedId = searchParams.get("linkedId");
+    if (!action && !linkedType && !linkedId) {
       return;
     }
 
+    const nextPrefill: UploadLinkPrefill =
+      (linkedType === "transaction" || linkedType === "account" || linkedType === "asset") && linkedId
+        ? {
+            linkedEntityType: linkedType,
+            linkedEntityId: linkedId,
+          }
+        : { ...EMPTY_UPLOAD_LINK_PREFILL };
+
+    setUploadLinkPrefill(nextPrefill);
+
     const nextParams = new URLSearchParams(searchParams);
     nextParams.delete("action");
+    nextParams.delete("linkedType");
+    nextParams.delete("linkedId");
     setSearchParams(nextParams, { replace: true });
 
     if (action === "upload") {
@@ -757,6 +802,16 @@ export default function VaultPage() {
             <DialogDescription>{pendingFile ? `Saving ${pendingFile.name} into your local vault.` : "Choose a document to store locally."}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {uploadPrefillSummary && (
+              <div className="rounded-lg border bg-secondary/20 px-4 py-3">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <FileText className="h-3.5 w-3.5" />
+                  Linking to {uploadPrefillSummary.typeLabel}
+                </div>
+                <p className="mt-1 text-sm font-medium">{uploadPrefillSummary.label}</p>
+                <p className="text-xs text-muted-foreground">{uploadPrefillSummary.detail}</p>
+              </div>
+            )}
             <div>
               <Label className="text-xs">Document Name</Label>
               <Input value={documentForm.name} onChange={(event) => setDocumentForm((current) => ({ ...current, name: event.target.value }))} />

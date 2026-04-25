@@ -95,6 +95,14 @@ export interface RecurringTemplate {
   updatedAt: string;
 }
 
+export interface AssetValueLog {
+  id: string;
+  date: string;
+  price: number;
+  note?: string;
+  source: 'manual' | 'import' | 'system';
+}
+
 export interface Asset {
   id: string;
   name: string;
@@ -110,6 +118,10 @@ export interface Asset {
   fundHouse?: string;
   nav?: number;
   sipAmount?: number;
+  valueLogs?: AssetValueLog[];
+  annualDepreciationRate?: number;
+  usefulLifeYears?: number;
+  salvageValue?: number;
 }
 
 export interface Loan {

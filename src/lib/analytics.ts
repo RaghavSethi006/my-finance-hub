@@ -434,6 +434,71 @@ export function buildPortfolioHistory(assets: Asset[], months = 6) {
   });
 }
 
+export function buildAssetValueSeries(asset: Asset) {
+  const valueLogs = [...(asset.valueLogs ?? [])]
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .map((log) => ({
+      date: log.date,
+      label: formatDay(parseDate(log.date)),
+      price: log.price,
+      totalValue: log.price * asset.quantity,
+      note: log.note,
+      source: log.source,
+    }));
+
+  if (valueLogs.length > 0) {
+    return valueLogs;
+  }
+
+  return [
+    {
+      date: asset.purchaseDate,
+      label: formatDay(parseDate(asset.purchaseDate)),
+      price: asset.currentPrice,
+      totalValue: asset.currentPrice * asset.quantity,
+      note: 'Current value snapshot',
+      source: 'system' as const,
+    },
+  ];
+}
+
+export function calculateAssetDepreciation(asset: Asset, asOf = new Date()) {
+  const isPhysical = ['real_estate', 'vehicle', 'gold', 'other'].includes(asset.type);
+  if (!isPhysical) {
+    return null;
+  }
+
+  const salvageValue = asset.salvageValue ?? 0;
+  const usefulLifeYears = asset.usefulLifeYears ?? 0;
+  const purchaseDate = parseDate(asset.purchaseDate);
+  const elapsedYears = Math.max(0, (asOf.getTime() - purchaseDate.getTime()) / (365.25 * 86400000));
+  const annualRate = asset.annualDepreciationRate ?? (usefulLifeYears > 0 ? ((asset.buyPrice - salvageValue) / asset.buyPrice) * (100 / usefulLifeYears) : 0);
+
+  const annualDepreciation = usefulLifeYears > 0
+    ? Math.max(0, (asset.buyPrice - salvageValue) / usefulLifeYears)
+    : (asset.buyPrice * annualRate) / 100;
+  const accumulatedDepreciation = Math.min(
+    Math.max(0, asset.buyPrice - salvageValue),
+    annualDepreciation * elapsedYears
+  );
+  const bookValue = Math.max(salvageValue, asset.buyPrice - accumulatedDepreciation);
+  const marketDelta = asset.currentPrice - bookValue;
+  const progressPercent =
+    asset.buyPrice > salvageValue ? (accumulatedDepreciation / Math.max(1, asset.buyPrice - salvageValue)) * 100 : 0;
+
+  return {
+    annualRate,
+    annualDepreciation,
+    monthlyDepreciation: annualDepreciation / 12,
+    accumulatedDepreciation,
+    bookValue,
+    marketDelta,
+    salvageValue,
+    usefulLifeYears,
+    progressPercent: Math.min(100, progressPercent),
+  };
+}
+
 export function buildTimeframeAssetAllocation(assets: Asset[], range: ResolvedDateRange) {
   const scopedAssets = assets.filter((asset) => asset.purchaseDate >= range.start && asset.purchaseDate <= range.end);
   const useScopedPurchases = range.label !== 'All time';

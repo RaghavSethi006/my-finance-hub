@@ -10,11 +10,11 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { buildPortfolioHistory } from "@/lib/analytics";
+import { buildAssetValueSeries, buildPortfolioHistory, calculateAssetDepreciation } from "@/lib/analytics";
 import { parseAssetCsv } from "@/lib/asset-import";
 import { formatCurrency, formatPercent } from "@/lib/currency";
 import { useFinOS } from "@/lib/store";
-import { Asset, AssetType, Currency, CURRENCY_CONFIG, VaultDocument } from "@/lib/types";
+import { Asset, AssetType, AssetValueLog, Currency, CURRENCY_CONFIG, VaultDocument } from "@/lib/types";
 import {
   BarChart3,
   Bitcoin,
@@ -30,6 +30,7 @@ import {
   LineChart as LineIcon,
   PieChart as PieIcon,
   Plus,
+  ShieldCheck,
   TrendingDown,
   TrendingUp,
   Trash2,
@@ -38,7 +39,7 @@ import {
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 const ASSET_COLORS = [
   "hsl(220, 70%, 50%)",
@@ -81,6 +82,8 @@ const assetTypeLabels: Record<AssetType, string> = {
   other: "Other",
 };
 
+const PHYSICAL_ASSET_TYPES: AssetType[] = ["real_estate", "vehicle", "gold", "other"];
+
 const initialAssetForm = {
   name: "",
   type: "stock" as AssetType,
@@ -93,6 +96,9 @@ const initialAssetForm = {
   purchaseDate: new Date().toISOString().split("T")[0],
   fundHouse: "",
   sipAmount: "",
+  annualDepreciationRate: "",
+  usefulLifeYears: "",
+  salvageValue: "",
   notes: "",
 };
 
@@ -101,8 +107,9 @@ function generateId(prefix: string) {
 }
 
 export default function AssetsPage() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { assets, loans, documents, settings, addAsset, importAssets, updateAsset, deleteAsset } = useFinOS();
+  const { assets, loans, documents, settings, addAsset, addAssetValueLog, importAssets, updateAsset, deleteAsset } = useFinOS();
   const portfolioHistory = buildPortfolioHistory(assets);
   const totalValue = useFinOS((state) => state.totalPortfolioValue());
   const totalCost = useFinOS((state) => state.totalPortfolioCost());
@@ -115,6 +122,11 @@ export default function AssetsPage() {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [deleteAssetId, setDeleteAssetId] = useState<string | null>(null);
   const [assetForm, setAssetForm] = useState(initialAssetForm);
+  const [valueLogForm, setValueLogForm] = useState({
+    date: new Date().toISOString().split("T")[0],
+    price: "",
+    note: "",
+  });
   const [activeTab, setActiveTab] = useState<string>(() => searchParams.get("tab") || "overview");
   const csvImportRef = useRef<HTMLInputElement>(null);
 
@@ -124,7 +136,7 @@ export default function AssetsPage() {
   const stocks = assets.filter((asset) => asset.type === "stock");
   const mutualFunds = assets.filter((asset) => asset.type === "mutual_fund");
   const cryptos = assets.filter((asset) => asset.type === "crypto");
-  const physicalAssets = assets.filter((asset) => ["real_estate", "vehicle", "gold", "other"].includes(asset.type));
+  const physicalAssets = assets.filter((asset) => PHYSICAL_ASSET_TYPES.includes(asset.type));
 
   const assetDocumentCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -142,6 +154,21 @@ export default function AssetsPage() {
         ? documents.filter((document) => document.linkedEntityType === "asset" && document.linkedEntityId === selectedAsset.id)
         : [],
     [documents, selectedAsset]
+  );
+
+  const selectedAssetValueSeries = useMemo(
+    () => (selectedAsset ? buildAssetValueSeries(selectedAsset) : []),
+    [selectedAsset]
+  );
+
+  const selectedAssetDepreciation = useMemo(
+    () => (selectedAsset ? calculateAssetDepreciation(selectedAsset) : null),
+    [selectedAsset]
+  );
+
+  const selectedAssetLogTimeline = useMemo(
+    () => [...selectedAssetValueSeries].sort((left, right) => right.date.localeCompare(left.date)),
+    [selectedAssetValueSeries]
   );
 
   const allocation = useMemo(() => {
@@ -176,6 +203,14 @@ export default function AssetsPage() {
   const physicalCost = physicalAssets.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0);
   const totalEmi = loans.filter((loan) => loan.status === "active").reduce((sum, loan) => sum + loan.emi, 0);
 
+  const resetValueLogForm = (asset?: Asset) => {
+    setValueLogForm({
+      date: new Date().toISOString().split("T")[0],
+      price: asset ? asset.currentPrice.toString() : "",
+      note: "",
+    });
+  };
+
   const openAddAsset = () => {
     setEditingAsset(null);
     setAssetForm({
@@ -200,6 +235,9 @@ export default function AssetsPage() {
       purchaseDate: asset.purchaseDate,
       fundHouse: asset.fundHouse ?? "",
       sipAmount: asset.sipAmount?.toString() ?? "",
+      annualDepreciationRate: asset.annualDepreciationRate?.toString() ?? "",
+      usefulLifeYears: asset.usefulLifeYears?.toString() ?? "",
+      salvageValue: asset.salvageValue?.toString() ?? "",
       notes: asset.notes ?? "",
     });
     setAssetModalOpen(true);
@@ -207,6 +245,7 @@ export default function AssetsPage() {
 
   const openAssetDetails = (asset: Asset) => {
     setSelectedAsset(asset);
+    resetValueLogForm(asset);
     setAssetDetailOpen(true);
   };
 
@@ -221,6 +260,23 @@ export default function AssetsPage() {
       setActiveTab(nextTab);
     }
   }, [activeTab, searchParams]);
+
+  useEffect(() => {
+    if (!selectedAsset) {
+      return;
+    }
+
+    const refreshedAsset = assets.find((asset) => asset.id === selectedAsset.id);
+    if (!refreshedAsset) {
+      setSelectedAsset(null);
+      setAssetDetailOpen(false);
+      return;
+    }
+
+    if (refreshedAsset !== selectedAsset) {
+      setSelectedAsset(refreshedAsset);
+    }
+  }, [assets, selectedAsset]);
 
   useEffect(() => {
     const action = searchParams.get("action");
@@ -247,6 +303,10 @@ export default function AssetsPage() {
     const buyPrice = parseFloat(assetForm.buyPrice);
     const currentPrice = parseFloat(assetForm.currentPrice);
     const sipAmount = assetForm.sipAmount ? parseFloat(assetForm.sipAmount) : undefined;
+    const annualDepreciationRate = assetForm.annualDepreciationRate ? parseFloat(assetForm.annualDepreciationRate) : undefined;
+    const usefulLifeYears = assetForm.usefulLifeYears ? parseFloat(assetForm.usefulLifeYears) : undefined;
+    const salvageValue = assetForm.salvageValue ? parseFloat(assetForm.salvageValue) : undefined;
+    const isPhysicalAsset = PHYSICAL_ASSET_TYPES.includes(assetForm.type);
 
     if (!assetForm.name.trim()) {
       toast.error("Asset name is required");
@@ -255,6 +315,16 @@ export default function AssetsPage() {
 
     if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(buyPrice) || buyPrice < 0 || !Number.isFinite(currentPrice) || currentPrice < 0) {
       toast.error("Enter valid quantity and pricing details");
+      return;
+    }
+
+    if (
+      isPhysicalAsset &&
+      ((assetForm.annualDepreciationRate && (!Number.isFinite(annualDepreciationRate) || annualDepreciationRate < 0)) ||
+        (assetForm.usefulLifeYears && (!Number.isFinite(usefulLifeYears) || usefulLifeYears <= 0)) ||
+        (assetForm.salvageValue && (!Number.isFinite(salvageValue) || salvageValue < 0)))
+    ) {
+      toast.error("Enter valid depreciation settings for this physical asset");
       return;
     }
 
@@ -273,6 +343,9 @@ export default function AssetsPage() {
       fundHouse: assetForm.type === "mutual_fund" ? assetForm.fundHouse.trim() || undefined : undefined,
       nav: assetForm.type === "mutual_fund" ? currentPrice : undefined,
       sipAmount: assetForm.type === "mutual_fund" && Number.isFinite(sipAmount) ? sipAmount : undefined,
+      annualDepreciationRate: isPhysicalAsset && Number.isFinite(annualDepreciationRate) ? annualDepreciationRate : undefined,
+      usefulLifeYears: isPhysicalAsset && Number.isFinite(usefulLifeYears) ? usefulLifeYears : undefined,
+      salvageValue: isPhysicalAsset && Number.isFinite(salvageValue) ? salvageValue : undefined,
     };
 
     if (editingAsset) {
@@ -287,6 +360,34 @@ export default function AssetsPage() {
     }
 
     setAssetModalOpen(false);
+  };
+
+  const handleAddValueLog = () => {
+    if (!selectedAsset) {
+      return;
+    }
+
+    const price = parseFloat(valueLogForm.price);
+    if (!valueLogForm.date) {
+      toast.error("Choose the date for this valuation");
+      return;
+    }
+    if (!Number.isFinite(price) || price < 0) {
+      toast.error("Enter a valid value for this log");
+      return;
+    }
+
+    addAssetValueLog(selectedAsset.id, {
+      date: valueLogForm.date,
+      price,
+      note: valueLogForm.note.trim() || undefined,
+      source: "manual",
+    });
+    resetValueLogForm({
+      ...selectedAsset,
+      currentPrice: price,
+    });
+    toast.success("Asset value log added");
   };
 
   const handleDeleteAsset = () => {
@@ -414,6 +515,13 @@ export default function AssetsPage() {
       </div>
     );
   };
+
+  const formatLogDate = (date: string) =>
+    new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -615,6 +723,7 @@ export default function AssetsPage() {
               const percentage = cost > 0 ? (profitLoss / cost) * 100 : 0;
               const isDepreciating = profitLoss < 0;
               const linkedDocCount = assetDocumentCounts[asset.id] || 0;
+              const depreciation = calculateAssetDepreciation(asset);
               return (
                 <Card key={asset.id} className="cursor-pointer transition-shadow hover:shadow-md" onClick={() => openAssetDetails(asset)}>
                   <CardContent className="pt-5">
@@ -649,6 +758,20 @@ export default function AssetsPage() {
                             <span className="text-xs text-muted-foreground">Purchased</span>
                             <p className="text-sm">{asset.purchaseDate}</p>
                           </div>
+                          {depreciation && (
+                            <>
+                              <div>
+                                <span className="text-xs text-muted-foreground">Book Value</span>
+                                <p className="text-sm font-mono">{formatCurrency(depreciation.bookValue * asset.quantity, asset.currency)}</p>
+                              </div>
+                              <div>
+                                <span className="text-xs text-muted-foreground">Useful Life</span>
+                                <p className="text-sm">
+                                  {depreciation.usefulLifeYears > 0 ? `${depreciation.usefulLifeYears.toFixed(1)} yrs` : `${depreciation.annualRate.toFixed(1)}% / yr`}
+                                </p>
+                              </div>
+                            </>
+                          )}
                         </div>
                         {asset.notes && <p className="mt-2 text-xs italic text-muted-foreground">{asset.notes}</p>}
                       </div>
@@ -819,6 +942,47 @@ export default function AssetsPage() {
               </div>
             )}
 
+            {PHYSICAL_ASSET_TYPES.includes(assetForm.type) && (
+              <div className="space-y-3 rounded-xl border bg-secondary/20 p-4">
+                <div>
+                  <p className="text-sm font-medium">Depreciation Assumptions</p>
+                  <p className="text-xs text-muted-foreground">Optional inputs for physical holdings so FinOS can estimate book value over time.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div>
+                    <Label className="text-xs">Annual Rate (%)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={assetForm.annualDepreciationRate}
+                      onChange={(event) => setAssetForm((current) => ({ ...current, annualDepreciationRate: event.target.value }))}
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Useful Life (Years)</Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      value={assetForm.usefulLifeYears}
+                      onChange={(event) => setAssetForm((current) => ({ ...current, usefulLifeYears: event.target.value }))}
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Salvage Value</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={assetForm.salvageValue}
+                      onChange={(event) => setAssetForm((current) => ({ ...current, salvageValue: event.target.value }))}
+                      placeholder="Optional"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div>
               <Label className="text-xs">Notes</Label>
               <Textarea value={assetForm.notes} onChange={(event) => setAssetForm((current) => ({ ...current, notes: event.target.value }))} placeholder="Why you're tracking this asset, depreciation assumptions, linked docs, etc." />
@@ -833,7 +997,7 @@ export default function AssetsPage() {
       </Dialog>
 
       <Dialog open={assetDetailOpen} onOpenChange={setAssetDetailOpen}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="max-h-[88vh] max-w-4xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {selectedAsset && typeIcons[selectedAsset.type]}
@@ -892,6 +1056,149 @@ export default function AssetsPage() {
                     <p className="font-mono">{formatCurrency(selectedAsset.sipAmount, selectedAsset.currency)}</p>
                   </div>
                 )}
+                {selectedAssetDepreciation && (
+                  <>
+                    <div>
+                      <span className="text-xs text-muted-foreground">Book Value</span>
+                      <p className="font-mono">{formatCurrency(selectedAssetDepreciation.bookValue * selectedAsset.quantity, selectedAsset.currency)}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted-foreground">Annual Depreciation</span>
+                      <p className="font-mono">{formatCurrency(selectedAssetDepreciation.annualDepreciation * selectedAsset.quantity, selectedAsset.currency)}</p>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium">Value Timeline</p>
+                    <p className="text-xs text-muted-foreground">Manual logs and system snapshots feed the current valuation.</p>
+                  </div>
+                  <Badge variant="secondary" className="text-[10px]">
+                    {selectedAssetLogTimeline.length} point{selectedAssetLogTimeline.length === 1 ? "" : "s"}
+                  </Badge>
+                </div>
+                <div className="h-56 rounded-xl border bg-secondary/10 p-3">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={selectedAssetValueSeries}>
+                      <defs>
+                        <linearGradient id="asset-history-fill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.32} />
+                          <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.16} />
+                      <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
+                      <YAxis
+                        tickLine={false}
+                        axisLine={false}
+                        fontSize={11}
+                        tickFormatter={(value: number) => formatCurrency(value, selectedAsset.currency)}
+                      />
+                      <Tooltip
+                        formatter={(value: number) => formatCurrency(value, selectedAsset.currency)}
+                        labelFormatter={(_, payload) => (payload?.[0]?.payload?.date ? formatLogDate(payload[0].payload.date) : "")}
+                      />
+                      <Area type="monotone" dataKey="totalValue" stroke="hsl(var(--primary))" strokeWidth={2} fill="url(#asset-history-fill)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+                <Card className="border-dashed">
+                  <CardContent className="space-y-3 pt-5">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Plus className="h-4 w-4 text-primary" />
+                      Add Manual Value Log
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <div>
+                        <Label className="text-xs">Date</Label>
+                        <Input
+                          type="date"
+                          value={valueLogForm.date}
+                          onChange={(event) => setValueLogForm((current) => ({ ...current, date: event.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Value Per Unit</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={valueLogForm.price}
+                          onChange={(event) => setValueLogForm((current) => ({ ...current, price: event.target.value }))}
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div className="flex items-end">
+                        <Button className="w-full gap-2" onClick={handleAddValueLog}>
+                          <Plus className="h-4 w-4" /> Save Log
+                        </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Note</Label>
+                      <Input
+                        value={valueLogForm.note}
+                        onChange={(event) => setValueLogForm((current) => ({ ...current, note: event.target.value }))}
+                        placeholder="Broker statement, appraisal, manual revaluation..."
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {selectedAssetDepreciation && (
+                  <Card className="border-dashed">
+                    <CardContent className="space-y-3 pt-5">
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        <ShieldCheck className="h-4 w-4 text-primary" />
+                        Depreciation View
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <span className="text-xs text-muted-foreground">Book Value</span>
+                          <p className="font-mono">{formatCurrency(selectedAssetDepreciation.bookValue * selectedAsset.quantity, selectedAsset.currency)}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Market Delta</span>
+                          <p className={`font-mono ${selectedAssetDepreciation.marketDelta >= 0 ? "text-profit" : "text-loss"}`}>
+                            {formatCurrency(selectedAssetDepreciation.marketDelta * selectedAsset.quantity, selectedAsset.currency)}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Monthly Depreciation</span>
+                          <p className="font-mono">{formatCurrency(selectedAssetDepreciation.monthlyDepreciation * selectedAsset.quantity, selectedAsset.currency)}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Salvage Value</span>
+                          <p className="font-mono">{formatCurrency(selectedAssetDepreciation.salvageValue * selectedAsset.quantity, selectedAsset.currency)}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Useful Life</span>
+                          <p>{selectedAssetDepreciation.usefulLifeYears > 0 ? `${selectedAssetDepreciation.usefulLifeYears.toFixed(1)} years` : `${selectedAssetDepreciation.annualRate.toFixed(1)}% annually`}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Accumulated</span>
+                          <p className="font-mono">{formatCurrency(selectedAssetDepreciation.accumulatedDepreciation * selectedAsset.quantity, selectedAsset.currency)}</p>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                          <span>Depreciation progress</span>
+                          <span>{selectedAssetDepreciation.progressPercent.toFixed(0)}%</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${selectedAssetDepreciation.progressPercent}%` }} />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
               </div>
 
               {selectedAsset.notes && (
@@ -908,9 +1215,22 @@ export default function AssetsPage() {
                 <>
                   <Separator />
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <FileText className="h-3.5 w-3.5" />
-                      Linked Documents
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <FileText className="h-3.5 w-3.5" />
+                        Linked Documents
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        onClick={() => {
+                          setAssetDetailOpen(false);
+                          navigate(`/vault?action=upload&linkedType=asset&linkedId=${selectedAsset.id}`);
+                        }}
+                      >
+                        <Upload className="h-3.5 w-3.5" /> Attach Document
+                      </Button>
                     </div>
                     <div className="space-y-2">
                       {selectedAssetDocuments.map((document) => (
@@ -920,6 +1240,53 @@ export default function AssetsPage() {
                   </div>
                 </>
               )}
+
+              {selectedAssetDocuments.length === 0 && (
+                <>
+                  <Separator />
+                  <Card className="border-dashed">
+                    <CardContent className="flex flex-col items-start gap-3 pt-5 text-sm">
+                      <div>
+                        <p className="font-medium">No documents linked yet</p>
+                        <p className="text-muted-foreground">Attach deeds, invoices, appraisals, or statements directly from this asset.</p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        className="gap-2"
+                        onClick={() => {
+                          setAssetDetailOpen(false);
+                          navigate(`/vault?action=upload&linkedType=asset&linkedId=${selectedAsset.id}`);
+                        }}
+                      >
+                        <Upload className="h-4 w-4" /> Upload Linked Document
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </>
+              )}
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <LineIcon className="h-3.5 w-3.5" />
+                    Value Log Timeline
+                  </div>
+                  <Badge variant="outline" className="text-[10px]">Latest price drives current value</Badge>
+                </div>
+                <div className="space-y-2">
+                  {selectedAssetLogTimeline.map((entry) => (
+                    <AssetValueLogRow
+                      key={`${entry.date}-${entry.source}-${entry.price}-${entry.note ?? ""}`}
+                      entry={entry}
+                      currency={selectedAsset.currency}
+                      quantity={selectedAsset.quantity}
+                      formatLogDate={formatLogDate}
+                    />
+                  ))}
+                </div>
+              </div>
 
               <Separator />
 
@@ -1003,6 +1370,39 @@ function AssetTable({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function AssetValueLogRow({
+  entry,
+  currency,
+  quantity,
+  formatLogDate,
+}: {
+  entry: Pick<AssetValueLog, "date" | "price" | "note" | "source">;
+  currency: Currency;
+  quantity: number;
+  formatLogDate: (date: string) => string;
+}) {
+  const sourceLabel = entry.source === "manual" ? "Manual" : entry.source === "import" ? "Import" : "System";
+  const totalValue = entry.price * quantity;
+
+  return (
+    <div className="rounded-lg border bg-secondary/10 px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium">{formatLogDate(entry.date)}</p>
+            <Badge variant="outline" className="text-[10px]">{sourceLabel}</Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Per-unit value {formatCurrency(entry.price, currency)} / Total {formatCurrency(totalValue, currency)}
+          </p>
+          {entry.note && <p className="mt-1 text-xs italic text-muted-foreground">{entry.note}</p>}
+        </div>
+        <p className="text-sm font-mono font-medium">{formatCurrency(totalValue, currency)}</p>
+      </div>
+    </div>
   );
 }
 
