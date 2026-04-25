@@ -9,6 +9,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { buildSmartInsights, resolveDashboardRange } from "@/lib/analytics";
 import {
   BellRing,
   Bitcoin,
@@ -43,12 +44,19 @@ function moduleRoute(module: "finance" | "ledger" | "assets" | "vault" | "tax") 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
-  const alerts = useFinOS((state) => state.alerts);
+  const accounts = useFinOS((state) => state.accounts);
+  const assets = useFinOS((state) => state.assets);
+  const budgets = useFinOS((state) => state.budgets);
+  const categories = useFinOS((state) => state.categories);
   const documents = useFinOS((state) => state.documents);
   const isDesktop = useFinOS((state) => state.isDesktop);
+  const loans = useFinOS((state) => state.loans);
+  const recurringTemplates = useFinOS((state) => state.recurringTemplates);
   const securityStatus = useFinOS((state) => state.securityStatus);
+  const settings = useFinOS((state) => state.settings);
   const lockApp = useFinOS((state) => state.lockApp);
   const lockVault = useFinOS((state) => state.lockVault);
+  const transactions = useFinOS((state) => state.transactions);
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -82,8 +90,20 @@ export function CommandPalette() {
   }, []);
 
   const actionableAlerts = useMemo(
-    () => alerts.filter((alert) => !alert.read).slice(0, 4),
-    [alerts]
+    () =>
+      buildSmartInsights({
+        accounts,
+        assets,
+        budgets,
+        categories,
+        defaultCurrency: settings.defaultCurrency,
+        documents,
+        loans,
+        range: resolveDashboardRange({ preset: "this_month" }, transactions),
+        recurringTemplates,
+        transactions,
+      }).slice(0, 4),
+    [accounts, assets, budgets, categories, documents, loans, recurringTemplates, settings.defaultCurrency, transactions]
   );
   const recentDocuments = useMemo(() => documents.slice(0, 3), [documents]);
 
@@ -161,7 +181,7 @@ export function CommandPalette() {
         {actionableAlerts.length > 0 && (
           <>
             <CommandSeparator />
-            <CommandGroup heading="Unread Alerts">
+            <CommandGroup heading="Active Alerts">
               {actionableAlerts.map((alert) => (
                 <CommandItem
                   key={alert.id}

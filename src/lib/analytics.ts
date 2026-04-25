@@ -1,4 +1,5 @@
-import type { Account, Asset, Category, Loan, Transaction } from './types';
+import { formatCurrency } from './currency';
+import type { Account, Asset, Category, Loan, RecurringTemplate, Transaction, VaultDocument } from './types';
 
 export type DashboardRangePreset = 'this_week' | 'this_month' | 'this_year' | 'last_30_days' | 'all_time' | 'custom';
 
@@ -12,6 +13,15 @@ export interface ResolvedDateRange {
   start: string;
   end: string;
   label: string;
+}
+
+export interface SmartInsight {
+  id: string;
+  title: string;
+  message: string;
+  severity: 'info' | 'warning' | 'success' | 'error';
+  module: 'finance' | 'ledger' | 'assets' | 'vault' | 'tax';
+  actionRoute?: string;
 }
 
 function parseDate(value: string): Date {
@@ -331,6 +341,16 @@ function monthKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function assetTypeLabel(asset: Asset): string {
+  if (asset.type === 'stock') return 'Stocks';
+  if (asset.type === 'mutual_fund') return 'Mutual Funds';
+  if (asset.type === 'crypto') return 'Crypto';
+  if (asset.type === 'real_estate') return 'Real Estate';
+  if (asset.type === 'gold') return 'Gold';
+  if (asset.type === 'vehicle') return 'Vehicles';
+  return 'Other';
+}
+
 function endOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
 }
@@ -412,4 +432,184 @@ export function buildPortfolioHistory(assets: Asset[], months = 6) {
       invested: activeAssets.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0),
     };
   });
+}
+
+export function buildTimeframeAssetAllocation(assets: Asset[], range: ResolvedDateRange) {
+  const scopedAssets = assets.filter((asset) => asset.purchaseDate >= range.start && asset.purchaseDate <= range.end);
+  const useScopedPurchases = range.label !== 'All time';
+  const allocationSource = useScopedPurchases ? scopedAssets : assets;
+
+  const data = allocationSource.reduce((accumulator, asset) => {
+    const name = assetTypeLabel(asset);
+    const existing = accumulator.find((entry) => entry.name === name);
+    const value = useScopedPurchases ? asset.buyPrice * asset.quantity : asset.currentPrice * asset.quantity;
+
+    if (existing) {
+      existing.value += value;
+    } else {
+      accumulator.push({ name, value });
+    }
+
+    return accumulator;
+  }, [] as Array<{ name: string; value: number }>);
+
+  return {
+    data,
+    title: useScopedPurchases ? `Capital Allocated (${range.label})` : 'Asset Allocation',
+    subtitle: useScopedPurchases
+      ? scopedAssets.length > 0
+        ? `Based on assets added between ${range.start} and ${range.end}.`
+        : `No assets were added between ${range.start} and ${range.end}.`
+      : 'Current holdings grouped by asset type.',
+    emptyLabel: useScopedPurchases
+      ? 'No asset purchases were recorded in this range yet.'
+      : 'No assets recorded yet.',
+  };
+}
+
+export function buildSmartInsights({
+  accounts,
+  assets,
+  budgets,
+  categories,
+  defaultCurrency,
+  documents,
+  loans,
+  range,
+  recurringTemplates,
+  transactions,
+}: {
+  accounts: Account[];
+  assets: Asset[];
+  budgets: { amount: number; spent: number; alertThreshold: number; categoryId: string }[];
+  categories: Category[];
+  defaultCurrency: string;
+  documents: VaultDocument[];
+  loans: Loan[];
+  range: ResolvedDateRange;
+  recurringTemplates: RecurringTemplate[];
+  transactions: Transaction[];
+}): SmartInsight[] {
+  const insights: SmartInsight[] = [];
+  const rangeTransactions = filterTransactionsByRange(transactions, range);
+  const rangeSummary = summarizeTransactions(rangeTransactions);
+  const liquidAccounts = accounts.filter((account) => account.type === 'bank' || account.type === 'cash');
+  const lowBalanceFloor = Math.max(250, rangeSummary.expenses * 0.15);
+  const lowBalanceAccounts = liquidAccounts.filter((account) => account.balance <= lowBalanceFloor);
+
+  if (lowBalanceAccounts.length > 0) {
+    const account = lowBalanceAccounts[0];
+    insights.push({
+      id: `low-balance-${account.id}`,
+      title: 'Low balance warning',
+      message:
+        lowBalanceAccounts.length === 1
+          ? `${account.name} is down to ${formatCurrency(account.balance, account.currency)}.`
+          : `${lowBalanceAccounts.length} liquid accounts are near your low-balance threshold.`,
+      severity: 'warning',
+      module: 'finance',
+      actionRoute: '/finance',
+    });
+  }
+
+  const stressedBudgets = budgets
+    .map((budget) => ({
+      ...budget,
+      percentage: budget.amount > 0 ? (budget.spent / budget.amount) * 100 : 0,
+      name: categories.find((category) => category.id === budget.categoryId)?.name ?? 'Budget',
+    }))
+    .filter((budget) => budget.percentage >= budget.alertThreshold)
+    .sort((left, right) => right.percentage - left.percentage);
+
+  if (stressedBudgets.length > 0) {
+    const budget = stressedBudgets[0];
+    insights.push({
+      id: `budget-${budget.categoryId}`,
+      title: budget.percentage >= 100 ? 'Budget exceeded' : 'Budget nearly exhausted',
+      message: `${budget.name} is at ${budget.percentage.toFixed(0)}% of plan this month.`,
+      severity: budget.percentage >= 100 ? 'error' : 'warning',
+      module: 'finance',
+      actionRoute: '/finance',
+    });
+  }
+
+  const deductibleCandidates = rangeTransactions.filter(
+    (transaction) => transaction.taxTag === 'business' && !transaction.isDeductible
+  );
+  if (deductibleCandidates.length > 0) {
+    const total = deductibleCandidates.reduce((sum, transaction) => sum + transaction.amount, 0);
+    insights.push({
+      id: 'tax-opportunity',
+      title: 'Tax opportunity detected',
+      message: `${deductibleCandidates.length} business transaction${deductibleCandidates.length === 1 ? '' : 's'} worth ${formatCurrency(total, defaultCurrency)} still need deduction review.`,
+      severity: 'info',
+      module: 'tax',
+      actionRoute: '/tax',
+    });
+  }
+
+  const unlinkedTaxDocuments = documents.filter(
+    (document) => document.category === 'tax' && (!document.linkedEntityId || !document.linkedEntityType)
+  );
+  if (unlinkedTaxDocuments.length > 0) {
+    insights.push({
+      id: 'unlinked-tax-docs',
+      title: 'Tax documents need linking',
+      message: `${unlinkedTaxDocuments.length} tax document${unlinkedTaxDocuments.length === 1 ? '' : 's'} are still unlinked to a transaction, account, or asset.`,
+      severity: 'info',
+      module: 'tax',
+      actionRoute: '/vault',
+    });
+  }
+
+  const documentedAssetIds = new Set(
+    documents
+      .filter((document) => document.linkedEntityType === 'asset' && document.linkedEntityId)
+      .map((document) => document.linkedEntityId as string)
+  );
+  const undocumentedAssets = assets.filter((asset) => !documentedAssetIds.has(asset.id));
+  if (undocumentedAssets.length > 0) {
+    insights.push({
+      id: 'asset-doc-gap',
+      title: 'Asset documentation gap',
+      message: `${undocumentedAssets.length} asset${undocumentedAssets.length === 1 ? '' : 's'} do not have supporting documents in the vault.`,
+      severity: 'warning',
+      module: 'vault',
+      actionRoute: '/assets',
+    });
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const overdueRecurring = recurringTemplates.filter((template) => !template.isPaused && template.nextDate < today);
+  if (overdueRecurring.length > 0) {
+    insights.push({
+      id: 'overdue-recurring',
+      title: 'Recurring items are overdue',
+      message: `${overdueRecurring.length} recurring template${overdueRecurring.length === 1 ? '' : 's'} should have fired before today.`,
+      severity: 'warning',
+      module: 'finance',
+      actionRoute: '/finance',
+    });
+  }
+
+  const assetValue = assets.reduce((sum, asset) => sum + asset.currentPrice * asset.quantity, 0);
+  const cashValue = accounts.reduce((sum, account) => sum + account.balance, 0);
+  const liabilityValue = loans
+    .filter((loan) => loan.status === 'active')
+    .reduce((sum, loan) => sum + loan.outstandingAmount, 0);
+  const netWorth = cashValue + assetValue - liabilityValue;
+  const milestone = Math.floor(netWorth / 25000) * 25000;
+
+  if (milestone >= 25000) {
+    insights.push({
+      id: 'net-worth-milestone',
+      title: 'Net worth milestone',
+      message: `You are currently above the ${formatCurrency(milestone, defaultCurrency)} net-worth mark.`,
+      severity: 'success',
+      module: 'ledger',
+      actionRoute: '/ledger',
+    });
+  }
+
+  return insights.slice(0, 6);
 }
