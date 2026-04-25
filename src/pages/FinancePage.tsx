@@ -1,9 +1,10 @@
 import { useFinOS } from "@/lib/store";
 import { formatCurrency } from "@/lib/currency";
+import { parseNaturalLanguageTransaction } from "@/lib/quick-add";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowUpRight, ArrowDownRight, Wallet, Plus, Search, Filter, X, Trash2, Edit2, Eye, EyeOff, Building2, CreditCard, TrendingUp, Bitcoin, Copy, ExternalLink, Users, Calendar, Hash, Repeat, Tags, FileText } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, Wallet, Plus, Search, Filter, X, Trash2, Edit2, Eye, EyeOff, Building2, CreditCard, TrendingUp, Bitcoin, Copy, ExternalLink, Users, Calendar, Hash, Repeat, Tags, FileText, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -96,6 +97,7 @@ export default function FinancePage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'tx' | 'acc' | 'bud' | 'recurring' | 'category'; id: string } | null>(null);
   const [showAccountNumbers, setShowAccountNumbers] = useState<Record<string, boolean>>({});
+  const [quickAddInput, setQuickAddInput] = useState('');
 
   // Transaction form state
   const [txForm, setTxForm] = useState({
@@ -225,6 +227,154 @@ export default function FinancePage() {
     createdAt,
     updatedAt: new Date().toISOString(),
   });
+
+  const buildRecurringTemplateFromValues = (
+    values: {
+      amount: number;
+      type: TransactionType;
+      categoryId: string;
+      accountId: string;
+      toAccountId?: string;
+      note: string;
+      paymentMethod: PaymentMethod;
+      currency: Currency;
+      taxTag: TaxTag;
+      isDeductible: boolean;
+      frequency: RecurringFrequency;
+      date: string;
+    },
+    templateId: string,
+    createdAt: string
+  ): RecurringTemplate => ({
+    id: templateId,
+    amount: values.amount,
+    type: values.type,
+    categoryId: values.categoryId,
+    accountId: values.accountId,
+    toAccountId: values.type === 'transfer' ? values.toAccountId || undefined : undefined,
+    note: values.note.trim(),
+    paymentMethod: values.paymentMethod,
+    currency: values.currency,
+    taxTag: values.taxTag,
+    isDeductible: values.isDeductible,
+    frequency: values.frequency,
+    nextDate: advanceRecurringDate(values.date, values.frequency),
+    isPaused: false,
+    createdAt,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const applyParsedQuickAddToForm = (input: string, openModal = true) => {
+    const parsed = parseNaturalLanguageTransaction({
+      input,
+      accounts,
+      categories,
+      defaultCurrency: settings.defaultCurrency,
+    });
+
+    const fallbackExpenseCategory = categories.find((category) => category.type === 'expense')?.id || '';
+    const fallbackIncomeCategory = categories.find((category) => category.type === 'income')?.id || '';
+    const fallbackAccountId = accounts[0]?.id || '';
+    const fallbackToAccountId = accounts.find((account) => account.id !== (parsed.accountId || fallbackAccountId))?.id || '';
+
+    setEditingTx(null);
+    setTxForm({
+      amount: parsed.amount ? parsed.amount.toString() : '',
+      type: parsed.type,
+      categoryId:
+        parsed.type === 'transfer'
+          ? fallbackExpenseCategory
+          : parsed.categoryId || (parsed.type === 'income' ? fallbackIncomeCategory : fallbackExpenseCategory),
+      accountId: parsed.accountId || fallbackAccountId,
+      toAccountId: parsed.type === 'transfer' ? parsed.toAccountId || fallbackToAccountId : '',
+      date: parsed.date,
+      note: parsed.note,
+      paymentMethod: parsed.paymentMethod,
+      currency: parsed.currency,
+      taxTag: parsed.taxTag,
+      isDeductible: parsed.isDeductible,
+      isRecurring: parsed.isRecurring,
+      frequency: parsed.frequency,
+    });
+
+    if (openModal) {
+      setTxModalOpen(true);
+    }
+
+    return parsed;
+  };
+
+  const handleQuickAdd = (mode: 'save' | 'review') => {
+    if (!quickAddInput.trim()) {
+      toast.error('Describe the transaction first');
+      return;
+    }
+
+    const parsed = applyParsedQuickAddToForm(quickAddInput, mode === 'review');
+
+    if (mode === 'review') {
+      toast.success('Quick add parsed. Review the form and save.');
+      return;
+    }
+
+    if (parsed.warnings.length > 0 || !parsed.amount || !parsed.accountId || (parsed.type === 'transfer' && !parsed.toAccountId)) {
+      setTxModalOpen(true);
+      toast.info(parsed.warnings[0] || 'Quick add parsed most of it. Review before saving.');
+      return;
+    }
+
+    const fallbackExpenseCategory = categories.find((category) => category.type === 'expense')?.id || '';
+    const fallbackIncomeCategory = categories.find((category) => category.type === 'income')?.id || '';
+    const recurringTemplateId = parsed.isRecurring ? generateId() : undefined;
+    const categoryId =
+      parsed.type === 'transfer'
+        ? fallbackExpenseCategory
+        : parsed.categoryId || (parsed.type === 'income' ? fallbackIncomeCategory : fallbackExpenseCategory);
+
+    addTransaction({
+      id: generateId(),
+      amount: parsed.amount,
+      type: parsed.type,
+      categoryId,
+      accountId: parsed.accountId,
+      toAccountId: parsed.type === 'transfer' ? parsed.toAccountId : undefined,
+      date: parsed.date,
+      note: parsed.note,
+      paymentMethod: parsed.paymentMethod,
+      currency: parsed.currency,
+      taxTag: parsed.taxTag,
+      isDeductible: parsed.isDeductible,
+      isRecurring: parsed.isRecurring,
+      recurringTemplateId,
+    });
+
+    if (parsed.isRecurring && recurringTemplateId) {
+      addRecurringTemplate(
+        buildRecurringTemplateFromValues(
+          {
+            amount: parsed.amount,
+            type: parsed.type,
+            categoryId,
+            accountId: parsed.accountId,
+            toAccountId: parsed.toAccountId,
+            note: parsed.note,
+            paymentMethod: parsed.paymentMethod,
+            currency: parsed.currency,
+            taxTag: parsed.taxTag,
+            isDeductible: parsed.isDeductible,
+            frequency: parsed.frequency,
+            date: parsed.date,
+          },
+          recurringTemplateId,
+          new Date().toISOString()
+        )
+      );
+    }
+
+    setQuickAddInput('');
+    toast.success(parsed.isRecurring ? 'Recurring transaction added from quick add' : 'Transaction added from quick add');
+  };
+
   const saveTx = () => {
     const amount = parseFloat(txForm.amount);
     if (!amount || amount <= 0 || !txForm.note.trim()) { toast.error('Please fill all required fields'); return; }
@@ -294,6 +444,11 @@ export default function FinancePage() {
 
     if (action === 'add-transaction') {
       openAddTx();
+      return;
+    }
+
+    if (action === 'quick-add') {
+      setQuickAddInput('');
       return;
     }
 
@@ -583,7 +738,12 @@ export default function FinancePage() {
           <h1 className="text-2xl font-bold tracking-tight">Finance Tracker</h1>
           <p className="text-sm text-muted-foreground">Transactions, accounts, budgets, recurring schedules and categories</p>
         </div>
-        <Button className="gap-2" onClick={openAddTx}><Plus className="h-4 w-4" /> Add Transaction</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" className="gap-2" onClick={() => handleQuickAdd('review')}>
+            <Sparkles className="h-4 w-4" /> Quick Add
+          </Button>
+          <Button className="gap-2" onClick={openAddTx}><Plus className="h-4 w-4" /> Add Transaction</Button>
+        </div>
       </div>
 
       <Tabs defaultValue="transactions">
@@ -597,6 +757,39 @@ export default function FinancePage() {
 
         {/* ========== TRANSACTIONS ========== */}
         <TabsContent value="transactions" className="mt-4 space-y-4">
+          <Card className="border-dashed">
+            <CardContent className="pt-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    Natural-Language Quick Add
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Try: "spent 45 on groceries from Chase yesterday", "salary 7500 to checking", or "monthly Netflix 18 from Amex".
+                  </p>
+                  <Input
+                    className="mt-3"
+                    placeholder="Describe a transaction in plain English..."
+                    value={quickAddInput}
+                    onChange={(event) => setQuickAddInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        handleQuickAdd('save');
+                      }
+                    }}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => handleQuickAdd('review')}>Review</Button>
+                  <Button className="gap-2" onClick={() => handleQuickAdd('save')}>
+                    <Sparkles className="h-4 w-4" /> Add Now
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           <div className="flex gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
