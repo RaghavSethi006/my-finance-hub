@@ -90,7 +90,7 @@ export default function TaxPage() {
 
   const exportSummary = () => {
     const report = [
-      `FinOS Tax Summary`,
+      `Aurum Tax Summary`,
       `Period: ${formatFinancialYear(Number(selectedFy))}`,
       `Gross income: ${formatCurrency(totalIncome, settings.defaultCurrency)}`,
       `Standard deduction: ${formatCurrency(standardDeduction, settings.defaultCurrency)}`,
@@ -100,7 +100,7 @@ export default function TaxPage() {
       `Effective rate: ${effectiveRate.toFixed(2)}%`,
     ].join("\n");
 
-    downloadTaxReport(`finos-tax-summary-${selectedFy}.txt`, report);
+    downloadTaxReport(`aurum-tax-summary-${selectedFy}.txt`, report);
   };
 
   return (
