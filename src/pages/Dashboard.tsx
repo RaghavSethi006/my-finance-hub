@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { useFinOS } from "@/lib/store";
 import { formatCurrency, formatPercent } from "@/lib/currency";
 import {
+  buildSmartInsights,
   buildExpenseCategorySeries,
   buildIncomeExpenseSeries,
+  buildTimeframeAssetAllocation,
   DashboardRangePreset,
   DashboardRangeSelection,
   filterTransactionsByRange,
@@ -82,7 +84,7 @@ const RANGE_OPTIONS: Array<{ value: DashboardRangePreset; label: string }> = [
 ];
 
 export default function Dashboard() {
-  const { settings, accounts, transactions, assets, budgets, alerts, documents, categories, recurringTemplates } = useFinOS();
+  const { settings, accounts, transactions, assets, budgets, documents, categories, recurringTemplates, loans } = useFinOS();
   const netWorth = useFinOS((state) => state.netWorth());
   const portfolioValue = useFinOS((state) => state.totalPortfolioValue());
   const portfolioCost = useFinOS((state) => state.totalPortfolioCost());
@@ -109,34 +111,32 @@ export default function Dashboard() {
     () => buildExpenseCategorySeries(rangeTransactions, categories, resolvedRange),
     [rangeTransactions, categories, resolvedRange]
   );
+  const timeframeAssetAllocation = useMemo(
+    () => buildTimeframeAssetAllocation(assets, resolvedRange),
+    [assets, resolvedRange]
+  );
+  const smartAlerts = useMemo(
+    () =>
+      buildSmartInsights({
+        accounts,
+        assets,
+        budgets,
+        categories,
+        defaultCurrency: settings.defaultCurrency,
+        documents,
+        loans,
+        range: resolvedRange,
+        recurringTemplates,
+        transactions,
+      }),
+    [accounts, assets, budgets, categories, documents, loans, recurringTemplates, resolvedRange, settings.defaultCurrency, transactions]
+  );
 
   const portfolioPL = portfolioValue - portfolioCost;
   const portfolioPLPercent = portfolioCost > 0 ? (portfolioPL / portfolioCost) * 100 : 0;
-  const unreadAlerts = alerts.filter((alert) => !alert.read);
   const periodDayCount = getDayCount(resolvedRange.start, resolvedRange.end);
   const annualizedIncome = periodSummary.income * (365 / periodDayCount);
   const estimatedTax = annualizedIncome * 0.22;
-
-  const assetAllocation = assets.reduce((accumulator, asset) => {
-    const label =
-      asset.type === "stock"
-        ? "Stocks"
-        : asset.type === "crypto"
-          ? "Crypto"
-          : asset.type === "real_estate"
-            ? "Real Estate"
-            : asset.type === "gold"
-              ? "Gold"
-              : "Other";
-    const existing = accumulator.find((entry) => entry.name === label);
-    const value = asset.currentPrice * asset.quantity;
-    if (existing) {
-      existing.value += value;
-    } else {
-      accumulator.push({ name: label, value });
-    }
-    return accumulator;
-  }, [] as { name: string; value: number }[]);
 
   const budgetOnTrack = budgets.filter((budget) => budget.amount > 0 && (budget.spent / budget.amount) * 100 < budget.alertThreshold).length;
   const recentTransactions = [...rangeTransactions]
@@ -303,23 +303,29 @@ export default function Dashboard() {
 
         <Card className="animate-fade-in" style={{ animationDelay: "300ms" }}>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Current Asset Allocation</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">{timeframeAssetAllocation.title}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-[180px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <RechartsPieChart>
-                  <Pie data={assetAllocation} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
-                    {assetAllocation.map((_, index) => (
-                      <Cell key={index} fill={ASSET_COLORS[index % ASSET_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), ""]} />
-                </RechartsPieChart>
-              </ResponsiveContainer>
+              {timeframeAssetAllocation.data.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <RechartsPieChart>
+                    <Pie data={timeframeAssetAllocation.data} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
+                      {timeframeAssetAllocation.data.map((_, index) => (
+                        <Cell key={index} fill={ASSET_COLORS[index % ASSET_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), ""]} />
+                  </RechartsPieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+                  {timeframeAssetAllocation.emptyLabel}
+                </div>
+              )}
             </div>
             <div className="mt-2 space-y-1.5">
-              {assetAllocation.map((item, index) => (
+              {timeframeAssetAllocation.data.map((item, index) => (
                 <div key={item.name} className="flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2">
                     <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ASSET_COLORS[index] }} />
@@ -329,7 +335,7 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-            <p className="mt-3 text-xs text-muted-foreground">This chart reflects current holdings, not the selected dashboard time range.</p>
+            <p className="mt-3 text-xs text-muted-foreground">{timeframeAssetAllocation.subtitle}</p>
           </CardContent>
         </Card>
       </div>
@@ -503,12 +509,12 @@ export default function Dashboard() {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">Alerts & Insights</CardTitle>
-              {unreadAlerts.length > 0 && <Badge variant="secondary" className="text-xs">{unreadAlerts.length} new</Badge>}
+              {smartAlerts.length > 0 && <Badge variant="secondary" className="text-xs">{smartAlerts.length} active</Badge>}
             </div>
           </CardHeader>
           <CardContent className="space-y-3">
-            {alerts.slice(0, 5).map((alert) => (
-              <div key={alert.id} className={`flex gap-3 rounded-lg p-2.5 ${!alert.read ? "bg-secondary/50" : ""}`}>
+            {smartAlerts.map((alert) => (
+              <div key={alert.id} className="flex gap-3 rounded-lg bg-secondary/50 p-2.5">
                 <div className="mt-0.5 shrink-0">
                   {alert.severity === "warning" && <AlertTriangle className="h-4 w-4 text-warning-color" />}
                   {alert.severity === "success" && <CheckCircle2 className="h-4 w-4 text-profit" />}
@@ -521,6 +527,11 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
+            {smartAlerts.length === 0 && (
+              <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                No cross-module issues detected right now.
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -9,11 +9,13 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { buildSmartInsights, resolveDashboardRange } from "@/lib/analytics";
 import {
   BellRing,
   Bitcoin,
   BookOpen,
   Calculator,
+  FileArchive,
   FileKey,
   FileLock2,
   FileText,
@@ -42,12 +44,19 @@ function moduleRoute(module: "finance" | "ledger" | "assets" | "vault" | "tax") 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
-  const alerts = useFinOS((state) => state.alerts);
-  const recentDocuments = useFinOS((state) => state.documents.slice(0, 3));
+  const accounts = useFinOS((state) => state.accounts);
+  const assets = useFinOS((state) => state.assets);
+  const budgets = useFinOS((state) => state.budgets);
+  const categories = useFinOS((state) => state.categories);
+  const documents = useFinOS((state) => state.documents);
   const isDesktop = useFinOS((state) => state.isDesktop);
+  const loans = useFinOS((state) => state.loans);
+  const recurringTemplates = useFinOS((state) => state.recurringTemplates);
   const securityStatus = useFinOS((state) => state.securityStatus);
+  const settings = useFinOS((state) => state.settings);
   const lockApp = useFinOS((state) => state.lockApp);
   const lockVault = useFinOS((state) => state.lockVault);
+  const transactions = useFinOS((state) => state.transactions);
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -81,9 +90,22 @@ export function CommandPalette() {
   }, []);
 
   const actionableAlerts = useMemo(
-    () => alerts.filter((alert) => !alert.read).slice(0, 4),
-    [alerts]
+    () =>
+      buildSmartInsights({
+        accounts,
+        assets,
+        budgets,
+        categories,
+        defaultCurrency: settings.defaultCurrency,
+        documents,
+        loans,
+        range: resolveDashboardRange({ preset: "this_month" }, transactions),
+        recurringTemplates,
+        transactions,
+      }).slice(0, 4),
+    [accounts, assets, budgets, categories, documents, loans, recurringTemplates, settings.defaultCurrency, transactions]
   );
+  const recentDocuments = useMemo(() => documents.slice(0, 3), [documents]);
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
@@ -127,6 +149,9 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/assets?action=add-asset")}>
             <Plus className="mr-2 h-4 w-4" /> Add Asset
           </CommandItem>
+          <CommandItem onSelect={() => go("/assets?action=import-csv")}>
+            <FileArchive className="mr-2 h-4 w-4" /> Import Asset CSV
+          </CommandItem>
           <CommandItem onSelect={() => go("/vault?action=upload")}>
             <FileText className="mr-2 h-4 w-4" /> Upload Document
           </CommandItem>
@@ -136,6 +161,11 @@ export function CommandPalette() {
           <CommandItem onSelect={() => go("/settings?action=vault-password")}>
             <FileKey className="mr-2 h-4 w-4" /> Change Vault Password
           </CommandItem>
+          {isDesktop && (
+            <CommandItem onSelect={() => go("/settings?action=encrypted-backup")}>
+              <FileArchive className="mr-2 h-4 w-4" /> Export Encrypted Backup
+            </CommandItem>
+          )}
           {isDesktop && securityStatus.hasAppPin && !securityStatus.isAppLocked && (
             <CommandItem onSelect={() => void runAction(lockApp)}>
               <Lock className="mr-2 h-4 w-4" /> Lock App Now
@@ -151,7 +181,7 @@ export function CommandPalette() {
         {actionableAlerts.length > 0 && (
           <>
             <CommandSeparator />
-            <CommandGroup heading="Unread Alerts">
+            <CommandGroup heading="Active Alerts">
               {actionableAlerts.map((alert) => (
                 <CommandItem
                   key={alert.id}

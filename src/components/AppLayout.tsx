@@ -1,15 +1,39 @@
+import { useMemo } from "react";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import { Bell, Search } from "lucide-react";
+import { buildSmartInsights, resolveDashboardRange } from "@/lib/analytics";
 import { useFinOS } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getCommandPaletteShortcutLabel, requestCommandPaletteOpen } from "@/lib/command-palette";
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
-  const alerts = useFinOS((s) => s.alerts);
+  const accounts = useFinOS((s) => s.accounts);
+  const assets = useFinOS((s) => s.assets);
+  const budgets = useFinOS((s) => s.budgets);
+  const categories = useFinOS((s) => s.categories);
+  const documents = useFinOS((s) => s.documents);
+  const loans = useFinOS((s) => s.loans);
+  const recurringTemplates = useFinOS((s) => s.recurringTemplates);
   const settings = useFinOS((s) => s.settings);
-  const unreadCount = alerts.filter((a) => !a.read).length;
+  const transactions = useFinOS((s) => s.transactions);
+  const unreadCount = useMemo(
+    () =>
+      buildSmartInsights({
+        accounts,
+        assets,
+        budgets,
+        categories,
+        defaultCurrency: settings.defaultCurrency,
+        documents,
+        loans,
+        range: resolveDashboardRange({ preset: "this_month" }, transactions),
+        recurringTemplates,
+        transactions,
+      }).length,
+    [accounts, assets, budgets, categories, documents, loans, recurringTemplates, settings.defaultCurrency, transactions]
+  );
   const shortcutLabel = getCommandPaletteShortcutLabel();
 
   return (
@@ -50,7 +74,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     )}
                   </button>
                 </TooltipTrigger>
-                <TooltipContent>{unreadCount} unread alerts</TooltipContent>
+                <TooltipContent>{unreadCount} active alerts</TooltipContent>
               </Tooltip>
               <div className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-primary/10 transition-colors hover:bg-primary/20">
                 <span className="text-xs font-semibold text-primary">{settings.name.charAt(0).toUpperCase()}</span>

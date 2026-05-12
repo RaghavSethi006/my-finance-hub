@@ -1,18 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "FinOS",
+  "productName": "Aurum",
   "version": "0.1.0",
-  "identifier": "com.finos.desktop",
+  "identifier": "com.aurum.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:8080",
-    "beforeDevCommand": "npm.cmd run dev",
-    "beforeBuildCommand": "npm.cmd run build"
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
       {
-        "title": "FinOS",
+        "title": "Aurum",
         "label": "main",
         "width": 1440,
         "height": 920,

@@ -142,6 +142,9 @@ CREATE TABLE IF NOT EXISTS assets (
     fund_house      TEXT,
     nav             REAL,
     sip_amount      REAL,
+    annual_depreciation_rate REAL,
+    useful_life_years REAL,
+    salvage_value   REAL,
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -154,6 +157,9 @@ CREATE TABLE IF NOT EXISTS asset_price_history (
     asset_id  TEXT    NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     price     REAL    NOT NULL,
     date      TEXT    NOT NULL,
+    source    TEXT,
+    note      TEXT,
+    external_id TEXT,
     UNIQUE(asset_id, date)
 );
 

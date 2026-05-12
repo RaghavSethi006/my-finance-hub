@@ -99,6 +99,16 @@ pub struct Budget {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssetValueLog {
+  pub id: String,
+  pub date: String,
+  pub price: f64,
+  pub note: Option<String>,
+  pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Asset {
   pub id: String,
   pub name: String,
@@ -115,6 +125,10 @@ pub struct Asset {
   pub fund_house: Option<String>,
   pub nav: Option<f64>,
   pub sip_amount: Option<f64>,
+  pub value_logs: Option<Vec<AssetValueLog>>,
+  pub annual_depreciation_rate: Option<f64>,
+  pub useful_life_years: Option<f64>,
+  pub salvage_value: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +246,19 @@ pub struct UnlockVaultPayload {
 #[serde(rename_all = "camelCase")]
 pub struct SetAutoLockTimeoutPayload {
   pub timeout_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportEncryptedBackupPayload {
+  pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportEncryptedBackupPayload {
+  pub password: String,
+  pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

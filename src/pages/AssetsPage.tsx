@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,10 +10,12 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { buildPortfolioHistory } from "@/lib/analytics";
+import { MarketRangePreset, buildAssetValueSeries, buildPortfolioMarketSeries, calculateAssetDepreciation } from "@/lib/analytics";
+import { parseAssetCsv } from "@/lib/asset-import";
 import { formatCurrency, formatPercent } from "@/lib/currency";
+import { syncMarketPrices } from "@/lib/market-data";
 import { useFinOS } from "@/lib/store";
-import { Asset, AssetType, Currency, CURRENCY_CONFIG, VaultDocument } from "@/lib/types";
+import { Asset, AssetType, AssetValueLog, Currency, CURRENCY_CONFIG, VaultDocument } from "@/lib/types";
 import {
   BarChart3,
   Bitcoin,
@@ -29,14 +31,17 @@ import {
   LineChart as LineIcon,
   PieChart as PieIcon,
   Plus,
+  RefreshCw,
+  ShieldCheck,
   TrendingDown,
   TrendingUp,
   Trash2,
+  Upload,
   Wallet,
 } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, Bar, CartesianGrid, Cell, ComposedChart, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 const ASSET_COLORS = [
   "hsl(220, 70%, 50%)",
@@ -79,6 +84,18 @@ const assetTypeLabels: Record<AssetType, string> = {
   other: "Other",
 };
 
+const PHYSICAL_ASSET_TYPES: AssetType[] = ["real_estate", "vehicle", "gold", "other"];
+const MARKET_RANGES: Array<{ value: MarketRangePreset; label: string }> = [
+  { value: "live", label: "Live" },
+  { value: "1h", label: "1H" },
+  { value: "1d", label: "1D" },
+  { value: "1w", label: "1W" },
+  { value: "1m", label: "1M" },
+  { value: "1y", label: "1Y" },
+  { value: "all", label: "All" },
+  { value: "custom", label: "Custom" },
+];
+
 const initialAssetForm = {
   name: "",
   type: "stock" as AssetType,
@@ -91,6 +108,9 @@ const initialAssetForm = {
   purchaseDate: new Date().toISOString().split("T")[0],
   fundHouse: "",
   sipAmount: "",
+  annualDepreciationRate: "",
+  usefulLifeYears: "",
+  salvageValue: "",
   notes: "",
 };
 
@@ -99,9 +119,9 @@ function generateId(prefix: string) {
 }
 
 export default function AssetsPage() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { assets, loans, documents, settings, addAsset, updateAsset, deleteAsset } = useFinOS();
-  const portfolioHistory = buildPortfolioHistory(assets);
+  const { assets, loans, documents, settings, addAsset, addAssetValueLog, applyAssetPriceSync, importAssets, updateAsset, deleteAsset } = useFinOS();
   const totalValue = useFinOS((state) => state.totalPortfolioValue());
   const totalCost = useFinOS((state) => state.totalPortfolioCost());
   const totalLoanOutstanding = useFinOS((state) => state.totalLoanOutstanding());
@@ -113,7 +133,21 @@ export default function AssetsPage() {
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
   const [deleteAssetId, setDeleteAssetId] = useState<string | null>(null);
   const [assetForm, setAssetForm] = useState(initialAssetForm);
+  const [valueLogForm, setValueLogForm] = useState({
+    date: new Date().toISOString().split("T")[0],
+    price: "",
+    note: "",
+  });
   const [activeTab, setActiveTab] = useState<string>(() => searchParams.get("tab") || "overview");
+  const [marketRange, setMarketRange] = useState<MarketRangePreset>("1m");
+  const [marketCustomRange, setMarketCustomRange] = useState({
+    start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+    end: new Date().toISOString().split("T")[0],
+  });
+  const [isSyncingMarketPrices, setIsSyncingMarketPrices] = useState(false);
+  const [lastMarketSyncAt, setLastMarketSyncAt] = useState<string | null>(null);
+  const csvImportRef = useRef<HTMLInputElement>(null);
+  const latestAssetsRef = useRef(assets);
 
   const totalPL = totalValue - totalCost;
   const plPercent = totalCost > 0 ? (totalPL / totalCost) * 100 : 0;
@@ -121,7 +155,7 @@ export default function AssetsPage() {
   const stocks = assets.filter((asset) => asset.type === "stock");
   const mutualFunds = assets.filter((asset) => asset.type === "mutual_fund");
   const cryptos = assets.filter((asset) => asset.type === "crypto");
-  const physicalAssets = assets.filter((asset) => ["real_estate", "vehicle", "gold", "other"].includes(asset.type));
+  const physicalAssets = assets.filter((asset) => PHYSICAL_ASSET_TYPES.includes(asset.type));
 
   const assetDocumentCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -139,6 +173,38 @@ export default function AssetsPage() {
         ? documents.filter((document) => document.linkedEntityType === "asset" && document.linkedEntityId === selectedAsset.id)
         : [],
     [documents, selectedAsset]
+  );
+
+  const selectedAssetValueSeries = useMemo(
+    () =>
+      selectedAsset
+        ? buildAssetValueSeries(selectedAsset, {
+            preset: marketRange,
+            customStart: marketCustomRange.start,
+            customEnd: marketCustomRange.end,
+          })
+        : [],
+    [marketCustomRange.end, marketCustomRange.start, marketRange, selectedAsset]
+  );
+
+  const selectedAssetDepreciation = useMemo(
+    () => (selectedAsset ? calculateAssetDepreciation(selectedAsset) : null),
+    [selectedAsset]
+  );
+
+  const selectedAssetLogTimeline = useMemo(
+    () => [...selectedAssetValueSeries].sort((left, right) => right.timestamp.localeCompare(left.timestamp)),
+    [selectedAssetValueSeries]
+  );
+
+  const marketSeries = useMemo(
+    () =>
+      buildPortfolioMarketSeries(assets, {
+        preset: marketRange,
+        customStart: marketCustomRange.start,
+        customEnd: marketCustomRange.end,
+      }),
+    [assets, marketCustomRange.end, marketCustomRange.start, marketRange]
   );
 
   const allocation = useMemo(() => {
@@ -172,6 +238,24 @@ export default function AssetsPage() {
   const physicalValue = physicalAssets.reduce((sum, asset) => sum + asset.currentPrice * asset.quantity, 0);
   const physicalCost = physicalAssets.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0);
   const totalEmi = loans.filter((loan) => loan.status === "active").reduce((sum, loan) => sum + loan.emi, 0);
+  const trackableAssetCount = assets.filter((asset) => ["stock", "mutual_fund", "crypto"].includes(asset.type) && asset.ticker).length;
+  const marketStartValue = marketSeries[0]?.value ?? totalValue;
+  const marketEndValue = marketSeries[marketSeries.length - 1]?.value ?? totalValue;
+  const marketMove = marketEndValue - marketStartValue;
+  const marketMovePercent = marketStartValue > 0 ? (marketMove / marketStartValue) * 100 : 0;
+  const latestMarketPoint = marketSeries[marketSeries.length - 1];
+
+  useEffect(() => {
+    latestAssetsRef.current = assets;
+  }, [assets]);
+
+  const resetValueLogForm = (asset?: Asset) => {
+    setValueLogForm({
+      date: new Date().toISOString().split("T")[0],
+      price: asset ? asset.currentPrice.toString() : "",
+      note: "",
+    });
+  };
 
   const openAddAsset = () => {
     setEditingAsset(null);
@@ -197,6 +281,9 @@ export default function AssetsPage() {
       purchaseDate: asset.purchaseDate,
       fundHouse: asset.fundHouse ?? "",
       sipAmount: asset.sipAmount?.toString() ?? "",
+      annualDepreciationRate: asset.annualDepreciationRate?.toString() ?? "",
+      usefulLifeYears: asset.usefulLifeYears?.toString() ?? "",
+      salvageValue: asset.salvageValue?.toString() ?? "",
       notes: asset.notes ?? "",
     });
     setAssetModalOpen(true);
@@ -204,6 +291,7 @@ export default function AssetsPage() {
 
   const openAssetDetails = (asset: Asset) => {
     setSelectedAsset(asset);
+    resetValueLogForm(asset);
     setAssetDetailOpen(true);
   };
 
@@ -220,6 +308,23 @@ export default function AssetsPage() {
   }, [activeTab, searchParams]);
 
   useEffect(() => {
+    if (!selectedAsset) {
+      return;
+    }
+
+    const refreshedAsset = assets.find((asset) => asset.id === selectedAsset.id);
+    if (!refreshedAsset) {
+      setSelectedAsset(null);
+      setAssetDetailOpen(false);
+      return;
+    }
+
+    if (refreshedAsset !== selectedAsset) {
+      setSelectedAsset(refreshedAsset);
+    }
+  }, [assets, selectedAsset]);
+
+  useEffect(() => {
     const action = searchParams.get("action");
     if (!action) {
       return;
@@ -230,15 +335,103 @@ export default function AssetsPage() {
     setSearchParams(nextParams, { replace: true });
 
     if (action === "add-asset") {
-      openAddAsset();
+      setEditingAsset(null);
+      setAssetForm({
+        ...initialAssetForm,
+        currency: settings.defaultCurrency,
+        purchaseDate: new Date().toISOString().split("T")[0],
+      });
+      setAssetModalOpen(true);
+      return;
     }
-  }, [searchParams, setSearchParams]);
+
+    if (action === "import-csv") {
+      csvImportRef.current?.click();
+    }
+  }, [searchParams, setSearchParams, settings.defaultCurrency]);
+
+  const handleRefreshMarketPrices = async (silent = false) => {
+    if (isSyncingMarketPrices) {
+      return;
+    }
+
+    setIsSyncingMarketPrices(true);
+    try {
+      const result = await syncMarketPrices(assets);
+      if (result.updates.length > 0) {
+        applyAssetPriceSync(result.updates);
+        setLastMarketSyncAt(new Date().toISOString());
+        if (!silent) {
+          toast.success(`Synced ${result.updates.length} live market price${result.updates.length === 1 ? "" : "s"}`);
+        }
+      } else if (!silent) {
+        toast.info(result.warnings[0] ?? "No live market prices could be synced for the current assets");
+      }
+
+      if (result.warnings.length > 0 && !silent) {
+        toast.warning(result.warnings[0]);
+      }
+    } catch (error) {
+      console.error(error);
+      if (!silent) {
+        toast.error(error instanceof Error ? error.message : "Failed to sync live market prices");
+      }
+    } finally {
+      setIsSyncingMarketPrices(false);
+    }
+  };
+
+  useEffect(() => {
+    if (trackableAssetCount === 0) {
+      return;
+    }
+
+    let lastFocusSync = 0;
+    const silentRefresh = async () => {
+      try {
+        const result = await syncMarketPrices(latestAssetsRef.current);
+        if (result.updates.length > 0) {
+          applyAssetPriceSync(result.updates);
+          setLastMarketSyncAt(new Date().toISOString());
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    };
+
+    void silentRefresh();
+
+    const refreshInterval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void silentRefresh();
+      }
+    }, 90 * 1000);
+
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusSync < 5 * 60 * 1000) {
+        return;
+      }
+      lastFocusSync = now;
+      void silentRefresh();
+    };
+
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(refreshInterval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [applyAssetPriceSync, trackableAssetCount]);
 
   const handleSaveAsset = () => {
     const quantity = parseFloat(assetForm.quantity);
     const buyPrice = parseFloat(assetForm.buyPrice);
     const currentPrice = parseFloat(assetForm.currentPrice);
     const sipAmount = assetForm.sipAmount ? parseFloat(assetForm.sipAmount) : undefined;
+    const annualDepreciationRate = assetForm.annualDepreciationRate ? parseFloat(assetForm.annualDepreciationRate) : undefined;
+    const usefulLifeYears = assetForm.usefulLifeYears ? parseFloat(assetForm.usefulLifeYears) : undefined;
+    const salvageValue = assetForm.salvageValue ? parseFloat(assetForm.salvageValue) : undefined;
+    const isPhysicalAsset = PHYSICAL_ASSET_TYPES.includes(assetForm.type);
 
     if (!assetForm.name.trim()) {
       toast.error("Asset name is required");
@@ -247,6 +440,16 @@ export default function AssetsPage() {
 
     if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(buyPrice) || buyPrice < 0 || !Number.isFinite(currentPrice) || currentPrice < 0) {
       toast.error("Enter valid quantity and pricing details");
+      return;
+    }
+
+    if (
+      isPhysicalAsset &&
+      ((assetForm.annualDepreciationRate && (!Number.isFinite(annualDepreciationRate) || annualDepreciationRate < 0)) ||
+        (assetForm.usefulLifeYears && (!Number.isFinite(usefulLifeYears) || usefulLifeYears <= 0)) ||
+        (assetForm.salvageValue && (!Number.isFinite(salvageValue) || salvageValue < 0)))
+    ) {
+      toast.error("Enter valid depreciation settings for this physical asset");
       return;
     }
 
@@ -265,6 +468,9 @@ export default function AssetsPage() {
       fundHouse: assetForm.type === "mutual_fund" ? assetForm.fundHouse.trim() || undefined : undefined,
       nav: assetForm.type === "mutual_fund" ? currentPrice : undefined,
       sipAmount: assetForm.type === "mutual_fund" && Number.isFinite(sipAmount) ? sipAmount : undefined,
+      annualDepreciationRate: isPhysicalAsset && Number.isFinite(annualDepreciationRate) ? annualDepreciationRate : undefined,
+      usefulLifeYears: isPhysicalAsset && Number.isFinite(usefulLifeYears) ? usefulLifeYears : undefined,
+      salvageValue: isPhysicalAsset && Number.isFinite(salvageValue) ? salvageValue : undefined,
     };
 
     if (editingAsset) {
@@ -281,6 +487,34 @@ export default function AssetsPage() {
     setAssetModalOpen(false);
   };
 
+  const handleAddValueLog = () => {
+    if (!selectedAsset) {
+      return;
+    }
+
+    const price = parseFloat(valueLogForm.price);
+    if (!valueLogForm.date) {
+      toast.error("Choose the date for this valuation");
+      return;
+    }
+    if (!Number.isFinite(price) || price < 0) {
+      toast.error("Enter a valid value for this log");
+      return;
+    }
+
+    addAssetValueLog(selectedAsset.id, {
+      date: valueLogForm.date,
+      price,
+      note: valueLogForm.note.trim() || undefined,
+      source: "manual",
+    });
+    resetValueLogForm({
+      ...selectedAsset,
+      currentPrice: price,
+    });
+    toast.success("Asset value log added");
+  };
+
   const handleDeleteAsset = () => {
     if (!deleteAssetId) return;
 
@@ -292,6 +526,44 @@ export default function AssetsPage() {
     toast.success("Asset deleted");
     setDeleteConfirmOpen(false);
     setDeleteAssetId(null);
+  };
+
+  const handleImportCsv = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      const csvText = typeof loadEvent.target?.result === "string" ? loadEvent.target.result : "";
+      const result = parseAssetCsv(csvText, settings.defaultCurrency);
+
+      if (result.assets.length === 0) {
+        toast.error(result.errors[0] ?? "No valid asset rows were found in the CSV file");
+        return;
+      }
+
+      const importedAssets: Asset[] = result.assets.map((asset, index) => ({
+        ...asset,
+        id: generateId(`asset-import-${index}`),
+      }));
+
+      importAssets(importedAssets);
+
+      if (result.errors.length > 0) {
+        toast.warning(`Imported ${result.assets.length} assets. Skipped ${result.errors.length} row${result.errors.length === 1 ? "" : "s"}.`);
+      } else {
+        toast.success(`Imported ${result.assets.length} asset${result.assets.length === 1 ? "" : "s"} from CSV`);
+      }
+    };
+
+    reader.onerror = () => {
+      toast.error("Unable to read the selected CSV file");
+    };
+
+    reader.readAsText(file);
+    event.target.value = "";
   };
 
   const renderAssetRow = (asset: Asset) => {
@@ -369,17 +641,81 @@ export default function AssetsPage() {
     );
   };
 
+  const formatLogDate = (date: string, timestamp?: string) =>
+    new Date(timestamp ?? `${date}T00:00:00`).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: timestamp ? "numeric" : undefined,
+      minute: timestamp ? "2-digit" : undefined,
+    });
+
+  const renderMarketRangeControls = () => (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {MARKET_RANGES.map((range) => (
+        <Button
+          key={range.value}
+          type="button"
+          variant={marketRange === range.value ? "default" : "outline"}
+          size="sm"
+          className="h-7 px-2.5 text-[11px] font-semibold"
+          onClick={() => setMarketRange(range.value)}
+        >
+          {range.label}
+        </Button>
+      ))}
+      {marketRange === "custom" && (
+        <div className="flex items-center gap-2 pl-1">
+          <Input
+            type="date"
+            value={marketCustomRange.start}
+            className="h-7 w-[132px] text-xs"
+            onChange={(event) => setMarketCustomRange((current) => ({ ...current, start: event.target.value }))}
+          />
+          <Input
+            type="date"
+            value={marketCustomRange.end}
+            className="h-7 w-[132px] text-xs"
+            onChange={(event) => setMarketCustomRange((current) => ({ ...current, end: event.target.value }))}
+          />
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="mx-auto max-w-7xl space-y-6">
+      <input ref={csvImportRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleImportCsv} />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Assets & Investments</h1>
           <p className="text-sm text-muted-foreground">Complete portfolio: investments, assets, and liabilities</p>
         </div>
-        <Button className="gap-2" onClick={openAddAsset}>
-          <Plus className="h-4 w-4" /> Add Asset
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={() => void handleRefreshMarketPrices()}
+            disabled={isSyncingMarketPrices || trackableAssetCount === 0}
+          >
+            <RefreshCw className={`h-4 w-4 ${isSyncingMarketPrices ? "animate-spin" : ""}`} />
+            {isSyncingMarketPrices ? "Syncing..." : "Live Sync"}
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={() => csvImportRef.current?.click()}>
+            <Upload className="h-4 w-4" /> Import CSV
+          </Button>
+          <Button className="gap-2" onClick={openAddAsset}>
+            <Plus className="h-4 w-4" /> Add Asset
+          </Button>
+        </div>
       </div>
+
+      {trackableAssetCount > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Live sync covers {trackableAssetCount} asset{trackableAssetCount === 1 ? "" : "s"} with ticker symbols.
+          {lastMarketSyncAt ? ` Last synced ${new Date(lastMarketSyncAt).toLocaleString()}.` : " Prices refresh on load, focus, and every 90 seconds while this page is visible."}
+        </p>
+      )}
 
       <Tabs
         value={activeTab}
@@ -469,35 +805,85 @@ export default function AssetsPage() {
               </CardContent>
             </Card>
 
-            <Card className="lg:col-span-2">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Portfolio Growth</CardTitle>
+            <Card className="overflow-hidden lg:col-span-2">
+              <CardHeader className="border-b pb-3">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-sm">
+                      <LineIcon className="h-4 w-4 text-primary" />
+                      Market Performance
+                    </CardTitle>
+                    <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="font-mono text-2xl font-bold">{formatCurrency(marketEndValue, settings.defaultCurrency)}</span>
+                      <span className={`font-mono text-sm font-semibold ${marketMove >= 0 ? "text-profit" : "text-loss"}`}>
+                        {marketMove >= 0 ? "+" : ""}
+                        {formatCurrency(marketMove, settings.defaultCurrency)} ({formatPercent(marketMovePercent)})
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {latestMarketPoint ? `Latest plotted quote ${new Date(latestMarketPoint.timestamp).toLocaleString()}` : "Waiting for market data."}
+                    </p>
+                  </div>
+                  {renderMarketRangeControls()}
+                </div>
               </CardHeader>
-              <CardContent>
-                <div className="h-[260px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={portfolioHistory}>
-                      <defs>
-                        <linearGradient id="portVal" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="hsl(220, 70%, 50%)" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="hsl(220, 70%, 50%)" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="portInv" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="hsl(152, 60%, 40%)" stopOpacity={0.2} />
-                          <stop offset="95%" stopColor="hsl(152, 60%, 40%)" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis dataKey="month" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: "12px" }}
-                        formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), ""]}
-                      />
-                      <Area type="monotone" dataKey="value" stroke="hsl(220, 70%, 50%)" fill="url(#portVal)" strokeWidth={2} name="Value" />
-                      <Area type="monotone" dataKey="invested" stroke="hsl(152, 60%, 40%)" fill="url(#portInv)" strokeWidth={2} name="Invested" strokeDasharray="5 5" />
-                    </AreaChart>
-                  </ResponsiveContainer>
+              <CardContent className="pt-4">
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_180px]">
+                  <div className="h-[300px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={marketSeries} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="marketValueFill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={marketMove >= 0 ? "hsl(var(--profit))" : "hsl(var(--loss))"} stopOpacity={0.32} />
+                            <stop offset="95%" stopColor={marketMove >= 0 ? "hsl(var(--profit))" : "hsl(var(--loss))"} stopOpacity={0.02} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 3" />
+                        <XAxis dataKey="label" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} minTickGap={18} />
+                        <YAxis
+                          yAxisId="value"
+                          tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                          axisLine={false}
+                          tickLine={false}
+                          width={58}
+                          tickFormatter={(value) => `${CURRENCY_CONFIG[settings.defaultCurrency].symbol}${(Number(value) / 1000).toFixed(0)}K`}
+                        />
+                        <YAxis yAxisId="activity" orientation="right" hide />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: "12px" }}
+                          labelFormatter={(_, payload) => (payload?.[0]?.payload?.timestamp ? new Date(payload[0].payload.timestamp).toLocaleString() : "")}
+                          formatter={(value: number, name: string) =>
+                            name === "Quote updates"
+                              ? [`${value} update${value === 1 ? "" : "s"}`, name]
+                              : [formatCurrency(value, settings.defaultCurrency), name]
+                          }
+                        />
+                        <Bar yAxisId="activity" dataKey="updates" name="Quote updates" fill="hsl(var(--primary) / 0.18)" barSize={18} radius={[3, 3, 0, 0]} />
+                        <Area yAxisId="value" type="monotone" dataKey="value" name="Market value" stroke={marketMove >= 0 ? "hsl(var(--profit))" : "hsl(var(--loss))"} strokeWidth={2.5} fill="url(#marketValueFill)" />
+                        <Line yAxisId="value" type="monotone" dataKey="invested" name="Invested" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" dot={false} strokeWidth={1.5} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 xl:grid-cols-1">
+                    <div className="rounded-lg border bg-secondary/20 p-3">
+                      <span className="text-[11px] text-muted-foreground">Range high</span>
+                      <p className="mt-1 font-mono text-sm font-semibold">
+                        {formatCurrency(Math.max(...marketSeries.map((point) => point.value), marketEndValue), settings.defaultCurrency)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border bg-secondary/20 p-3">
+                      <span className="text-[11px] text-muted-foreground">Range low</span>
+                      <p className="mt-1 font-mono text-sm font-semibold">
+                        {formatCurrency(Math.min(...marketSeries.map((point) => point.value), marketEndValue), settings.defaultCurrency)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border bg-secondary/20 p-3">
+                      <span className="text-[11px] text-muted-foreground">Quote events</span>
+                      <p className="mt-1 font-mono text-sm font-semibold">
+                        {marketSeries.reduce((sum, point) => sum + point.updates, 0)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -563,6 +949,7 @@ export default function AssetsPage() {
               const percentage = cost > 0 ? (profitLoss / cost) * 100 : 0;
               const isDepreciating = profitLoss < 0;
               const linkedDocCount = assetDocumentCounts[asset.id] || 0;
+              const depreciation = calculateAssetDepreciation(asset);
               return (
                 <Card key={asset.id} className="cursor-pointer transition-shadow hover:shadow-md" onClick={() => openAssetDetails(asset)}>
                   <CardContent className="pt-5">
@@ -597,6 +984,20 @@ export default function AssetsPage() {
                             <span className="text-xs text-muted-foreground">Purchased</span>
                             <p className="text-sm">{asset.purchaseDate}</p>
                           </div>
+                          {depreciation && (
+                            <>
+                              <div>
+                                <span className="text-xs text-muted-foreground">Book Value</span>
+                                <p className="text-sm font-mono">{formatCurrency(depreciation.bookValue * asset.quantity, asset.currency)}</p>
+                              </div>
+                              <div>
+                                <span className="text-xs text-muted-foreground">Useful Life</span>
+                                <p className="text-sm">
+                                  {depreciation.usefulLifeYears > 0 ? `${depreciation.usefulLifeYears.toFixed(1)} yrs` : `${depreciation.annualRate.toFixed(1)}% / yr`}
+                                </p>
+                              </div>
+                            </>
+                          )}
                         </div>
                         {asset.notes && <p className="mt-2 text-xs italic text-muted-foreground">{asset.notes}</p>}
                       </div>
@@ -689,7 +1090,7 @@ export default function AssetsPage() {
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingAsset ? "Edit Asset" : "Add Asset"}</DialogTitle>
-            <DialogDescription>Capture the details you want FinOS to track for this holding.</DialogDescription>
+            <DialogDescription>Capture the details you want Aurum to track for this holding.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -767,6 +1168,47 @@ export default function AssetsPage() {
               </div>
             )}
 
+            {PHYSICAL_ASSET_TYPES.includes(assetForm.type) && (
+              <div className="space-y-3 rounded-xl border bg-secondary/20 p-4">
+                <div>
+                  <p className="text-sm font-medium">Depreciation Assumptions</p>
+                  <p className="text-xs text-muted-foreground">Optional inputs for physical holdings so Aurum can estimate book value over time.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div>
+                    <Label className="text-xs">Annual Rate (%)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={assetForm.annualDepreciationRate}
+                      onChange={(event) => setAssetForm((current) => ({ ...current, annualDepreciationRate: event.target.value }))}
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Useful Life (Years)</Label>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      value={assetForm.usefulLifeYears}
+                      onChange={(event) => setAssetForm((current) => ({ ...current, usefulLifeYears: event.target.value }))}
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Salvage Value</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={assetForm.salvageValue}
+                      onChange={(event) => setAssetForm((current) => ({ ...current, salvageValue: event.target.value }))}
+                      placeholder="Optional"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div>
               <Label className="text-xs">Notes</Label>
               <Textarea value={assetForm.notes} onChange={(event) => setAssetForm((current) => ({ ...current, notes: event.target.value }))} placeholder="Why you're tracking this asset, depreciation assumptions, linked docs, etc." />
@@ -781,7 +1223,7 @@ export default function AssetsPage() {
       </Dialog>
 
       <Dialog open={assetDetailOpen} onOpenChange={setAssetDetailOpen}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="max-h-[88vh] max-w-4xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {selectedAsset && typeIcons[selectedAsset.type]}
@@ -840,6 +1282,150 @@ export default function AssetsPage() {
                     <p className="font-mono">{formatCurrency(selectedAsset.sipAmount, selectedAsset.currency)}</p>
                   </div>
                 )}
+                {selectedAssetDepreciation && (
+                  <>
+                    <div>
+                      <span className="text-xs text-muted-foreground">Book Value</span>
+                      <p className="font-mono">{formatCurrency(selectedAssetDepreciation.bookValue * selectedAsset.quantity, selectedAsset.currency)}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted-foreground">Annual Depreciation</span>
+                      <p className="font-mono">{formatCurrency(selectedAssetDepreciation.annualDepreciation * selectedAsset.quantity, selectedAsset.currency)}</p>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium">Value Timeline</p>
+                    <p className="text-xs text-muted-foreground">Timestamped quote logs power the same market range selected above.</p>
+                  </div>
+                  {renderMarketRangeControls()}
+                  <Badge variant="secondary" className="text-[10px]">
+                    {selectedAssetLogTimeline.length} point{selectedAssetLogTimeline.length === 1 ? "" : "s"}
+                  </Badge>
+                </div>
+                <div className="h-56 rounded-xl border bg-secondary/10 p-3">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={selectedAssetValueSeries}>
+                      <defs>
+                        <linearGradient id="asset-history-fill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.32} />
+                          <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.16} />
+                      <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
+                      <YAxis
+                        tickLine={false}
+                        axisLine={false}
+                        fontSize={11}
+                        tickFormatter={(value: number) => formatCurrency(value, selectedAsset.currency)}
+                      />
+                      <Tooltip
+                        formatter={(value: number) => formatCurrency(value, selectedAsset.currency)}
+                        labelFormatter={(_, payload) => (payload?.[0]?.payload?.date ? formatLogDate(payload[0].payload.date, payload[0].payload.timestamp) : "")}
+                      />
+                      <Area type="monotone" dataKey="totalValue" stroke="hsl(var(--primary))" strokeWidth={2} fill="url(#asset-history-fill)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+                <Card className="border-dashed">
+                  <CardContent className="space-y-3 pt-5">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Plus className="h-4 w-4 text-primary" />
+                      Add Manual Value Log
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <div>
+                        <Label className="text-xs">Date</Label>
+                        <Input
+                          type="date"
+                          value={valueLogForm.date}
+                          onChange={(event) => setValueLogForm((current) => ({ ...current, date: event.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Value Per Unit</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={valueLogForm.price}
+                          onChange={(event) => setValueLogForm((current) => ({ ...current, price: event.target.value }))}
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div className="flex items-end">
+                        <Button className="w-full gap-2" onClick={handleAddValueLog}>
+                          <Plus className="h-4 w-4" /> Save Log
+                        </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Note</Label>
+                      <Input
+                        value={valueLogForm.note}
+                        onChange={(event) => setValueLogForm((current) => ({ ...current, note: event.target.value }))}
+                        placeholder="Broker statement, appraisal, manual revaluation..."
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {selectedAssetDepreciation && (
+                  <Card className="border-dashed">
+                    <CardContent className="space-y-3 pt-5">
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        <ShieldCheck className="h-4 w-4 text-primary" />
+                        Depreciation View
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <span className="text-xs text-muted-foreground">Book Value</span>
+                          <p className="font-mono">{formatCurrency(selectedAssetDepreciation.bookValue * selectedAsset.quantity, selectedAsset.currency)}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Market Delta</span>
+                          <p className={`font-mono ${selectedAssetDepreciation.marketDelta >= 0 ? "text-profit" : "text-loss"}`}>
+                            {formatCurrency(selectedAssetDepreciation.marketDelta * selectedAsset.quantity, selectedAsset.currency)}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Monthly Depreciation</span>
+                          <p className="font-mono">{formatCurrency(selectedAssetDepreciation.monthlyDepreciation * selectedAsset.quantity, selectedAsset.currency)}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Salvage Value</span>
+                          <p className="font-mono">{formatCurrency(selectedAssetDepreciation.salvageValue * selectedAsset.quantity, selectedAsset.currency)}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Useful Life</span>
+                          <p>{selectedAssetDepreciation.usefulLifeYears > 0 ? `${selectedAssetDepreciation.usefulLifeYears.toFixed(1)} years` : `${selectedAssetDepreciation.annualRate.toFixed(1)}% annually`}</p>
+                        </div>
+                        <div>
+                          <span className="text-xs text-muted-foreground">Accumulated</span>
+                          <p className="font-mono">{formatCurrency(selectedAssetDepreciation.accumulatedDepreciation * selectedAsset.quantity, selectedAsset.currency)}</p>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                          <span>Depreciation progress</span>
+                          <span>{selectedAssetDepreciation.progressPercent.toFixed(0)}%</span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${selectedAssetDepreciation.progressPercent}%` }} />
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
               </div>
 
               {selectedAsset.notes && (
@@ -856,9 +1442,22 @@ export default function AssetsPage() {
                 <>
                   <Separator />
                   <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <FileText className="h-3.5 w-3.5" />
-                      Linked Documents
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <FileText className="h-3.5 w-3.5" />
+                        Linked Documents
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2"
+                        onClick={() => {
+                          setAssetDetailOpen(false);
+                          navigate(`/vault?action=upload&linkedType=asset&linkedId=${selectedAsset.id}`);
+                        }}
+                      >
+                        <Upload className="h-3.5 w-3.5" /> Attach Document
+                      </Button>
                     </div>
                     <div className="space-y-2">
                       {selectedAssetDocuments.map((document) => (
@@ -868,6 +1467,53 @@ export default function AssetsPage() {
                   </div>
                 </>
               )}
+
+              {selectedAssetDocuments.length === 0 && (
+                <>
+                  <Separator />
+                  <Card className="border-dashed">
+                    <CardContent className="flex flex-col items-start gap-3 pt-5 text-sm">
+                      <div>
+                        <p className="font-medium">No documents linked yet</p>
+                        <p className="text-muted-foreground">Attach deeds, invoices, appraisals, or statements directly from this asset.</p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        className="gap-2"
+                        onClick={() => {
+                          setAssetDetailOpen(false);
+                          navigate(`/vault?action=upload&linkedType=asset&linkedId=${selectedAsset.id}`);
+                        }}
+                      >
+                        <Upload className="h-4 w-4" /> Upload Linked Document
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </>
+              )}
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <LineIcon className="h-3.5 w-3.5" />
+                    Value Log Timeline
+                  </div>
+                  <Badge variant="outline" className="text-[10px]">Latest price drives current value</Badge>
+                </div>
+                <div className="space-y-2">
+                  {selectedAssetLogTimeline.map((entry) => (
+                    <AssetValueLogRow
+                      key={`${entry.date}-${entry.source}-${entry.price}-${entry.note ?? ""}`}
+                      entry={entry}
+                      currency={selectedAsset.currency}
+                      quantity={selectedAsset.quantity}
+                      formatLogDate={formatLogDate}
+                    />
+                  ))}
+                </div>
+              </div>
 
               <Separator />
 
@@ -902,7 +1548,7 @@ export default function AssetsPage() {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Delete Asset?</DialogTitle>
-            <DialogDescription>This removes the asset from your portfolio history in FinOS. This action cannot be undone.</DialogDescription>
+            <DialogDescription>This removes the asset from your portfolio history in Aurum. This action cannot be undone.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
@@ -951,6 +1597,39 @@ function AssetTable({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function AssetValueLogRow({
+  entry,
+  currency,
+  quantity,
+  formatLogDate,
+}: {
+  entry: Pick<AssetValueLog, "date" | "timestamp" | "price" | "note" | "source">;
+  currency: Currency;
+  quantity: number;
+  formatLogDate: (date: string, timestamp?: string) => string;
+}) {
+  const sourceLabel = entry.source === "manual" ? "Manual" : entry.source === "import" ? "Import" : "System";
+  const totalValue = entry.price * quantity;
+
+  return (
+    <div className="rounded-lg border bg-secondary/10 px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium">{formatLogDate(entry.date, "timestamp" in entry ? entry.timestamp : undefined)}</p>
+            <Badge variant="outline" className="text-[10px]">{sourceLabel}</Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Per-unit value {formatCurrency(entry.price, currency)} / Total {formatCurrency(totalValue, currency)}
+          </p>
+          {entry.note && <p className="mt-1 text-xs italic text-muted-foreground">{entry.note}</p>}
+        </div>
+        <p className="text-sm font-mono font-medium">{formatCurrency(totalValue, currency)}</p>
+      </div>
+    </div>
   );
 }
 

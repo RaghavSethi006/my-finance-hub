@@ -67,7 +67,7 @@ export function OnboardingFlow() {
                   First Launch Setup
                 </Badge>
                 <div className="space-y-2">
-                  <h1 className="text-3xl font-semibold tracking-tight">Welcome to FinOS</h1>
+                  <h1 className="text-3xl font-semibold tracking-tight">Welcome to Aurum</h1>
                   <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
                     Let&apos;s turn this into your actual financial desktop. We&apos;ll choose how your workspace
                     starts, set your identity, and get you into the app with a cleaner first-run experience.
@@ -150,7 +150,7 @@ export function OnboardingFlow() {
                       <Label htmlFor="onboarding-name">Display Name</Label>
                       <Input
                         id="onboarding-name"
-                        placeholder="How should FinOS address you?"
+                        placeholder="How should Aurum address you?"
                         value={name}
                         onChange={(event) => setName(event.target.value)}
                       />
@@ -223,7 +223,7 @@ export function OnboardingFlow() {
               <div className="space-y-2">
                 <p className="text-sm font-medium">What happens next</p>
                 <p className="text-sm leading-6 text-muted-foreground">
-                  FinOS will save this setup locally, keep the workspace consistent across reloads, and let you refine
+                  Aurum will save this setup locally, keep the workspace consistent across reloads, and let you refine
                   security from Settings whenever you&apos;re ready.
                 </p>
               </div>

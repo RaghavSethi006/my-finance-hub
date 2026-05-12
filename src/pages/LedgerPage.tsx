@@ -145,7 +145,7 @@ export default function LedgerPage() {
         )
       );
       downloadFile(
-        `finos-ledger-journal-${period}-${stamp}.csv`,
+        `aurum-ledger-journal-${period}-${stamp}.csv`,
         `Journal ID,Date,Description,Account,Type,Debit,Credit\n${normalizedRows.join("\n")}`,
         "text/csv;charset=utf-8"
       );
@@ -158,7 +158,7 @@ export default function LedgerPage() {
         "Account,Type,Debit,Credit,Net",
         ...trialBalance.map((row) => `${row.name},${row.accountType},${row.debit},${row.credit},${row.net}`),
       ].join("\n");
-      downloadFile(`finos-trial-balance-${period}-${stamp}.csv`, csv, "text/csv;charset=utf-8");
+      downloadFile(`aurum-trial-balance-${period}-${stamp}.csv`, csv, "text/csv;charset=utf-8");
       toast.success("Trial balance exported");
       return;
     }
@@ -177,7 +177,7 @@ export default function LedgerPage() {
         "Expenses by category:",
         ...Object.entries(expenseByCategory).map(([name, amount]) => `- ${name}: ${formatCurrency(amount, settings.defaultCurrency)}`),
       ].join("\n");
-      downloadFile(`finos-income-statement-${period}-${stamp}.txt`, summary, "text/plain;charset=utf-8");
+      downloadFile(`aurum-income-statement-${period}-${stamp}.txt`, summary, "text/plain;charset=utf-8");
       toast.success("Income statement exported");
       return;
     }
@@ -194,7 +194,7 @@ export default function LedgerPage() {
         `Loans outstanding: ${formatCurrency(totalLoanOutstanding, settings.defaultCurrency)}`,
         `Net worth: ${formatCurrency(netWorth, settings.defaultCurrency)}`,
       ].join("\n");
-      downloadFile(`finos-balance-sheet-${period}-${stamp}.txt`, summary, "text/plain;charset=utf-8");
+      downloadFile(`aurum-balance-sheet-${period}-${stamp}.txt`, summary, "text/plain;charset=utf-8");
       toast.success("Balance sheet exported");
       return;
     }
@@ -203,7 +203,7 @@ export default function LedgerPage() {
       "Month,Assets,Liabilities,Net Worth",
       ...netWorthHistory.map((point) => `${point.month},${point.assets},${point.liabilities},${point.netWorth}`),
     ].join("\n");
-    downloadFile(`finos-net-worth-${stamp}.csv`, csv, "text/csv;charset=utf-8");
+    downloadFile(`aurum-net-worth-${stamp}.csv`, csv, "text/csv;charset=utf-8");
     toast.success("Net worth history exported");
   };
 

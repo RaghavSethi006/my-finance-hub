@@ -1,11 +1,11 @@
 use rusqlite::{params, Connection, Transaction};
 
-use super::models::{Asset, Loan};
+use super::models::{Asset, AssetValueLog, Loan};
 
 pub fn load_assets(conn: &Connection) -> Result<Vec<Asset>, String> {
   let mut assets_stmt = conn
     .prepare(
-      "SELECT id, name, type, ticker, exchange, quantity, buy_price, current_price, currency, purchase_date, notes, fund_house, nav, sip_amount
+      "SELECT id, name, type, ticker, exchange, quantity, buy_price, current_price, currency, purchase_date, notes, fund_house, nav, sip_amount, annual_depreciation_rate, useful_life_years, salvage_value
        FROM assets
        ORDER BY purchase_date ASC, name ASC",
     )
@@ -28,21 +28,34 @@ pub fn load_assets(conn: &Connection) -> Result<Vec<Asset>, String> {
         fund_house: row.get(11)?,
         nav: row.get(12)?,
         sip_amount: row.get(13)?,
+        value_logs: None,
+        annual_depreciation_rate: row.get(14)?,
+        useful_life_years: row.get(15)?,
+        salvage_value: row.get(16)?,
       })
     })
     .map_err(|error| format!("Unable to load assets: {error}"))?
     .collect::<Result<Vec<_>, _>>()
     .map_err(|error| format!("Unable to collect assets: {error}"))?;
 
-  Ok(assets)
+  assets
+    .into_iter()
+    .map(|mut asset| {
+      let value_logs = load_asset_value_logs(conn, &asset.id)?;
+      if !value_logs.is_empty() {
+        asset.value_logs = Some(value_logs);
+      }
+      Ok(asset)
+    })
+    .collect::<Result<Vec<_>, String>>()
 }
 
 pub fn insert_assets(transaction: &Transaction<'_>, assets: &[Asset]) -> Result<(), String> {
   for asset in assets {
     transaction
       .execute(
-        "INSERT INTO assets (id, name, type, ticker, exchange, quantity, buy_price, current_price, currency, purchase_date, notes, fund_house, nav, sip_amount)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO assets (id, name, type, ticker, exchange, quantity, buy_price, current_price, currency, purchase_date, notes, fund_house, nav, sip_amount, annual_depreciation_rate, useful_life_years, salvage_value)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
           asset.id,
           asset.name,
@@ -57,10 +70,32 @@ pub fn insert_assets(transaction: &Transaction<'_>, assets: &[Asset]) -> Result<
           asset.notes,
           asset.fund_house,
           asset.nav,
-          asset.sip_amount
+          asset.sip_amount,
+          asset.annual_depreciation_rate,
+          asset.useful_life_years,
+          asset.salvage_value
         ],
       )
       .map_err(|error| format!("Unable to store asset {}: {error}", asset.id))?;
+
+    if let Some(value_logs) = &asset.value_logs {
+      for value_log in value_logs {
+        transaction
+          .execute(
+            "INSERT INTO asset_price_history (asset_id, price, date, source, note, external_id)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+              asset.id,
+              value_log.price,
+              value_log.date,
+              value_log.source,
+              value_log.note,
+              value_log.id
+            ],
+          )
+          .map_err(|error| format!("Unable to store asset price history for {}: {error}", asset.id))?;
+      }
+    }
   }
   Ok(())
 }
@@ -126,4 +161,34 @@ pub fn insert_loans(transaction: &Transaction<'_>, loans: &[Loan]) -> Result<(),
       .map_err(|error| format!("Unable to store loan {}: {error}", loan.id))?;
   }
   Ok(())
+}
+
+fn load_asset_value_logs(conn: &Connection, asset_id: &str) -> Result<Vec<AssetValueLog>, String> {
+  let mut stmt = conn
+    .prepare(
+      "SELECT id, external_id, date, price, note, source
+       FROM asset_price_history
+       WHERE asset_id = ?
+       ORDER BY date ASC, id ASC",
+    )
+    .map_err(|error| format!("Unable to prepare asset price history query: {error}"))?;
+
+  let rows = stmt
+    .query_map([asset_id], |row| {
+      let row_id: i64 = row.get(0)?;
+      let external_id: Option<String> = row.get(1)?;
+      let date: String = row.get(2)?;
+      Ok(AssetValueLog {
+        id: external_id.unwrap_or_else(|| format!("{asset_id}-{date}-{row_id}")),
+        date,
+        price: row.get(3)?,
+        note: row.get(4)?,
+        source: row.get::<_, Option<String>>(5)?.unwrap_or_else(|| String::from("system")),
+      })
+    })
+    .map_err(|error| format!("Unable to query asset price history for {asset_id}: {error}"))?;
+
+  rows
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| format!("Unable to collect asset price history for {asset_id}: {error}"))
 }

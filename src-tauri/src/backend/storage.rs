@@ -70,6 +70,7 @@ pub fn ensure_schema(state: &AppState) -> Result<(), String> {
   conn
     .execute_batch(SCHEMA_SQL)
     .map_err(|error| format!("Unable to initialize schema: {error}"))?;
+  ensure_runtime_schema(&conn)?;
   Ok(())
 }
 
@@ -186,5 +187,35 @@ fn initialize_runtime_security(state: &AppState) -> Result<(), String> {
   security.vault_locked = vault_password_hash.is_some();
   security.last_activity_at = now_unix_timestamp();
   security.vault_key = None;
+  Ok(())
+}
+
+fn ensure_runtime_schema(conn: &Connection) -> Result<(), String> {
+  ensure_column(conn, "assets", "annual_depreciation_rate", "ALTER TABLE assets ADD COLUMN annual_depreciation_rate REAL")?;
+  ensure_column(conn, "assets", "useful_life_years", "ALTER TABLE assets ADD COLUMN useful_life_years REAL")?;
+  ensure_column(conn, "assets", "salvage_value", "ALTER TABLE assets ADD COLUMN salvage_value REAL")?;
+  ensure_column(conn, "asset_price_history", "source", "ALTER TABLE asset_price_history ADD COLUMN source TEXT")?;
+  ensure_column(conn, "asset_price_history", "note", "ALTER TABLE asset_price_history ADD COLUMN note TEXT")?;
+  ensure_column(conn, "asset_price_history", "external_id", "ALTER TABLE asset_price_history ADD COLUMN external_id TEXT")?;
+  Ok(())
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, statement: &str) -> Result<(), String> {
+  let mut stmt = conn
+    .prepare(&format!("PRAGMA table_info({table})"))
+    .map_err(|error| format!("Unable to inspect {table} columns: {error}"))?;
+  let existing = stmt
+    .query_map([], |row| row.get::<_, String>(1))
+    .map_err(|error| format!("Unable to query {table} columns: {error}"))?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|error| format!("Unable to collect {table} columns: {error}"))?;
+
+  if existing.iter().any(|name| name == column) {
+    return Ok(());
+  }
+
+  conn
+    .execute(statement, [])
+    .map_err(|error| format!("Unable to migrate {table}.{column}: {error}"))?;
   Ok(())
 }

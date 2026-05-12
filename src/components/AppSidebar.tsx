@@ -6,9 +6,8 @@ import {
   Shield,
   Calculator,
   Settings,
-  Lock,
-  ChevronLeft,
 } from "lucide-react";
+import { BrandMark } from "@/components/BrandMark";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import {
@@ -49,13 +48,11 @@ export function AppSidebar() {
     <Sidebar collapsible="icon" className="border-r-0 gradient-sidebar">
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary">
-            <span className="text-sm font-bold text-sidebar-primary-foreground">F</span>
-          </div>
+          <BrandMark className="h-9 w-9 rounded-lg" />
           {!collapsed && (
             <div className="flex flex-col">
-              <span className="text-base font-bold text-sidebar-header tracking-tight">FinOS</span>
-              <span className="text-[10px] text-sidebar-muted font-medium tracking-widest uppercase">Financial OS</span>
+              <span className="text-base font-bold text-sidebar-header tracking-tight">Aurum</span>
+              <span className="text-[10px] text-sidebar-muted font-medium tracking-widest uppercase">Private Wealth OS</span>
             </div>
           )}
         </div>

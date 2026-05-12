@@ -20,6 +20,7 @@ import { isTauriDesktop } from "./lib/desktop";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { BrandMark } from "@/components/BrandMark";
 import { Lock } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -92,8 +93,8 @@ function AppBootstrap() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <div className="space-y-2 text-center">
-          <div className="mx-auto h-10 w-10 animate-pulse rounded-2xl bg-primary/20" />
-          <p className="text-sm font-medium">Loading FinOS...</p>
+          <BrandMark className="mx-auto h-12 w-12 animate-pulse rounded-2xl" />
+          <p className="text-sm font-medium">Loading Aurum...</p>
           <p className="text-xs text-muted-foreground">Preparing your local financial workspace</p>
         </div>
       </div>
@@ -166,8 +167,9 @@ function DesktopLockScreen() {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 px-4 backdrop-blur-sm">
       <Card className="w-full max-w-md border-primary/20 shadow-2xl">
         <CardContent className="space-y-5 p-8 text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-            <Lock className="h-7 w-7 text-primary" />
+          <div className="relative mx-auto grid h-16 w-16 place-items-center">
+            <BrandMark className="h-16 w-16 rounded-2xl opacity-95" />
+            <Lock className="absolute h-6 w-6 text-white" />
           </div>
           <div className="space-y-1">
             <h2 className="text-2xl font-semibold">App Locked</h2>

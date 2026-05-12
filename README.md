@@ -1,6 +1,6 @@
-# FinOS
+# Aurum
 
-> A local-first, privacy-first Financial Operating System for your entire financial life.
+> A local-first, privacy-first Private Wealth Operating System for your entire financial life.
 > Built with React, Tauri, SQLite, and shadcn/ui.
 
 ---
@@ -16,11 +16,11 @@
 
 ---
 
-## What Is FinOS?
+## What Is Aurum?
 
-FinOS is a desktop application that gives you complete visibility and control over your financial life — without sending a single byte to the cloud. Everything runs locally on your machine. Your data stays yours.
+Aurum is a desktop application that gives you complete visibility and control over your financial life — without sending a single byte to the cloud. Everything runs locally on your machine. Your data stays yours.
 
-It is not a simple expense tracker. FinOS is a full financial operating system combining five modules into one unified interface:
+It is not a simple expense tracker. Aurum is a full Private Wealth Operating System combining five modules into one unified interface:
 
 - **Finance Tracker** — transactions, budgets, accounts, recurring payments
 - **Accounting Engine** — double-entry ledger, income statements, balance sheets
@@ -34,7 +34,7 @@ All five modules share one SQLite database, one design system, and one unified d
 
 ## Why Local-First?
 
-Every major finance app — Mint, YNAB, Personal Capital, Quicken — requires you to hand over your most sensitive data to a third party. FinOS takes the opposite approach.
+Every major finance app — Mint, YNAB, Personal Capital, Quicken — requires you to hand over your most sensitive data to a third party. Aurum takes the opposite approach.
 
 - **No account required** — open the app and start using it
 - **No internet required** — works completely offline
@@ -50,7 +50,7 @@ Every major finance app — Mint, YNAB, Personal Capital, Quicken — requires y
 
 ### 1. Finance Tracker
 
-The foundation of FinOS. Track every rupee in and out across all your accounts.
+The foundation of Aurum. Track every rupee in and out across all your accounts.
 
 #### Transactions
 - Add income, expenses, and transfers between accounts
@@ -99,7 +99,7 @@ The foundation of FinOS. Track every rupee in and out across all your accounts.
 
 ---
 
-### 2. Accounting Engine (FinOS Ledger)
+### 2. Accounting Engine (Aurum Ledger)
 
 Turns raw transaction data into real financial understanding. Built on double-entry accounting principles.
 
@@ -143,7 +143,7 @@ Turns raw transaction data into real financial understanding. Built on double-en
 
 ---
 
-### 3. Asset & Investment Tracker (FinOS Assets)
+### 3. Asset & Investment Tracker (Aurum Assets)
 
 Track everything you own beyond cash. See your complete portfolio in one place.
 
@@ -190,7 +190,7 @@ Track everything you own beyond cash. See your complete portfolio in one place.
 
 ---
 
-### 4. Secure Document Vault (FinOS Vault)
+### 4. Secure Document Vault (Aurum Vault)
 
 An encrypted, organized, locally-stored cabinet for every important financial document.
 
@@ -257,7 +257,7 @@ An encrypted, organized, locally-stored cabinet for every important financial do
 
 ---
 
-### 5. Tax Assistant (FinOS Finance — Phase 2)
+### 5. Tax Assistant (Aurum Finance — Phase 2)
 
 Understand your tax position and prepare for filing without a CA for the basics.
 
@@ -316,7 +316,7 @@ Understand your tax position and prepare for filing without a CA for the basics.
 
 ---
 
-### 6. Unified Financial OS (main)
+### 6. Unified Private Wealth OS (main)
 
 The integrated app combining all five modules into one experience.
 
@@ -397,8 +397,8 @@ One shortcut to do anything:
 ### Monorepo Branch Structure
 
 ```
-FinOS/
-├── main      ← Integrated Financial OS
+Aurum/
+├── main      ← Integrated Private Wealth OS
 ├── core      ← Shared DB, models, queries, utilities
 ├── finance   ← Finance Tracker + Tax Assistant
 ├── ledger    ← Accounting Engine
@@ -434,7 +434,7 @@ recurring_templates  — templates for auto-recurring transactions
 
 ### Why All Apps Share One DB
 
-All Tauri apps use `"identifier": "com.finos.app"` in `tauri.conf.json`. Tauri derives the app data directory from this identifier — same identifier across all apps means the same directory, and therefore the same `finance.db` file. Data entered in the Finance Tracker is immediately visible in the Ledger and Vice versa, with no sync required.
+All Tauri apps use `"identifier": "com.aurum.app"` in `tauri.conf.json`. Tauri derives the app data directory from this identifier — same identifier across all apps means the same directory, and therefore the same `finance.db` file. Data entered in the Finance Tracker is immediately visible in the Ledger and Vice versa, with no sync required.
 
 ### Encryption Architecture
 
@@ -463,9 +463,9 @@ Metadata (name, category, path, tags)  →  SQLite only
 ### Run
 
 ```bash
-git clone https://github.com/yourusername/FinOS.git
-cd FinOS && git checkout main
-cd apps/finos
+git clone https://github.com/yourusername/Aurum.git
+cd Aurum && git checkout main
+cd apps/aurum
 npm install
 npm run tauri dev
 ```
@@ -474,7 +474,7 @@ npm run tauri dev
 
 ```bash
 npm run tauri build
-# Installer output: apps/finos/src-tauri/target/release/bundle/
+# Installer output: apps/aurum/src-tauri/target/release/bundle/
 ```
 
 ### Running Individual Modules
@@ -498,8 +498,8 @@ All modules share the same database — data entered in one is visible in all.
 | Telemetry | None |
 | Account required | No |
 | Data location | Your machine only |
-| Database path (macOS) | `~/Library/Application Support/com.finos.app/` |
-| Vault path (macOS) | `~/Library/Application Support/com.finos.app/vault/` |
+| Database path (macOS) | `~/Library/Application Support/com.aurum.app/` |
+| Vault path (macOS) | `~/Library/Application Support/com.aurum.app/vault/` |
 | Export | Full JSON or CSV export any time via Settings |
 
 ---

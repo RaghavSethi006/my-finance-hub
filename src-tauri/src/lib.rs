@@ -2,8 +2,10 @@ mod backend;
 
 use backend::{
   delete_vault_document,
+  export_encrypted_backup,
   get_desktop_paths,
   get_security_status,
+  import_encrypted_backup,
   import_vault_document,
   initialize_app_state,
   lock_app,
@@ -42,6 +44,8 @@ pub fn run() {
       import_vault_document,
       delete_vault_document,
       read_vault_document,
+      export_encrypted_backup,
+      import_encrypted_backup,
       get_desktop_paths,
       log_frontend_event,
       get_security_status,

@@ -1,6 +1,14 @@
-import type { Account, Asset, Category, Loan, Transaction } from './types';
+import { formatCurrency } from './currency';
+import type { Account, Asset, AssetValueLog, Category, Loan, RecurringTemplate, Transaction, VaultDocument } from './types';
 
 export type DashboardRangePreset = 'this_week' | 'this_month' | 'this_year' | 'last_30_days' | 'all_time' | 'custom';
+export type MarketRangePreset = 'live' | '1h' | '1d' | '1w' | '1m' | '1y' | 'all' | 'custom';
+
+export interface MarketRangeSelection {
+  preset: MarketRangePreset;
+  customStart?: string;
+  customEnd?: string;
+}
 
 export interface DashboardRangeSelection {
   preset: DashboardRangePreset;
@@ -14,8 +22,22 @@ export interface ResolvedDateRange {
   label: string;
 }
 
+export interface SmartInsight {
+  id: string;
+  title: string;
+  message: string;
+  severity: 'info' | 'warning' | 'success' | 'error';
+  module: 'finance' | 'ledger' | 'assets' | 'vault' | 'tax';
+  actionRoute?: string;
+}
+
 function parseDate(value: string): Date {
   return new Date(`${value}T00:00:00`);
+}
+
+function parseLogDateTime(log: Pick<AssetValueLog, 'date' | 'timestamp'>): Date {
+  const parsed = new Date(log.timestamp ?? `${log.date}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? parseDate(log.date) : parsed;
 }
 
 function startOfDay(date: Date): Date {
@@ -331,6 +353,16 @@ function monthKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function assetTypeLabel(asset: Asset): string {
+  if (asset.type === 'stock') return 'Stocks';
+  if (asset.type === 'mutual_fund') return 'Mutual Funds';
+  if (asset.type === 'crypto') return 'Crypto';
+  if (asset.type === 'real_estate') return 'Real Estate';
+  if (asset.type === 'gold') return 'Gold';
+  if (asset.type === 'vehicle') return 'Vehicles';
+  return 'Other';
+}
+
 function endOfMonth(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
 }
@@ -412,4 +444,342 @@ export function buildPortfolioHistory(assets: Asset[], months = 6) {
       invested: activeAssets.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0),
     };
   });
+}
+
+function formatMarketTime(date: Date, range: MarketRangePreset): string {
+  if (range === 'live' || range === '1h' || range === '1d') {
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+  if (range === '1w' || range === '1m') {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+}
+
+function resolveMarketRange(selection: MarketRangeSelection, logs: Array<Pick<AssetValueLog, 'date' | 'timestamp'>>, now = new Date()) {
+  const end = selection.preset === 'custom' && selection.customEnd ? endOfDay(parseDate(selection.customEnd)) : now;
+  let start: Date | undefined;
+
+  if (selection.preset === 'live') start = new Date(end.getTime() - 15 * 60 * 1000);
+  if (selection.preset === '1h') start = new Date(end.getTime() - 60 * 60 * 1000);
+  if (selection.preset === '1d') start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+  if (selection.preset === '1w') start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+  if (selection.preset === '1m') start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+  if (selection.preset === '1y') start = new Date(end.getTime() - 365 * 24 * 60 * 60 * 1000);
+  if (selection.preset === 'custom') start = selection.customStart ? startOfDay(parseDate(selection.customStart)) : undefined;
+
+  if (!start) {
+    const firstLog = [...logs].sort((left, right) => parseLogDateTime(left).getTime() - parseLogDateTime(right).getTime())[0];
+    start = firstLog ? parseLogDateTime(firstLog) : startOfDay(end);
+  }
+
+  return { start, end };
+}
+
+function getAssetLogs(asset: Asset): AssetValueLog[] {
+  return asset.valueLogs && asset.valueLogs.length > 0
+    ? asset.valueLogs
+    : [
+        {
+          id: `${asset.id}-current`,
+          date: asset.purchaseDate,
+          price: asset.currentPrice,
+          note: 'Current value snapshot',
+          source: 'system',
+        },
+      ];
+}
+
+export function buildAssetValueSeries(asset: Asset, selection: MarketRangeSelection = { preset: 'all' }) {
+  const logs = getAssetLogs(asset);
+  const range = resolveMarketRange(selection, logs);
+  const valueLogs = [...logs]
+    .filter((log) => {
+      const timestamp = parseLogDateTime(log).getTime();
+      return timestamp >= range.start.getTime() && timestamp <= range.end.getTime();
+    })
+    .sort((left, right) => parseLogDateTime(left).getTime() - parseLogDateTime(right).getTime())
+    .map((log) => ({
+      date: log.date,
+      timestamp: log.timestamp ?? `${log.date}T00:00:00`,
+      label: formatMarketTime(parseLogDateTime(log), selection.preset),
+      price: log.price,
+      totalValue: log.price * asset.quantity,
+      note: log.note,
+      source: log.source,
+    }));
+
+  if (valueLogs.length > 0) {
+    return valueLogs;
+  }
+
+  return [
+    {
+      date: asset.purchaseDate,
+      timestamp: `${asset.purchaseDate}T00:00:00`,
+      label: formatMarketTime(parseDate(asset.purchaseDate), selection.preset),
+      price: asset.currentPrice,
+      totalValue: asset.currentPrice * asset.quantity,
+      note: 'Current value snapshot',
+      source: 'system' as const,
+    },
+  ];
+}
+
+export function buildPortfolioMarketSeries(assets: Asset[], selection: MarketRangeSelection) {
+  const allLogs = assets.flatMap((asset) => getAssetLogs(asset));
+  const range = resolveMarketRange(selection, allLogs);
+  const timestamps = new Set<number>([range.start.getTime(), range.end.getTime()]);
+
+  assets.forEach((asset) => {
+    getAssetLogs(asset).forEach((log) => {
+      const timestamp = parseLogDateTime(log).getTime();
+      if (timestamp >= range.start.getTime() && timestamp <= range.end.getTime()) {
+        timestamps.add(timestamp);
+      }
+    });
+  });
+
+  return [...timestamps]
+    .sort((left, right) => left - right)
+    .map((timestamp) => {
+      const date = new Date(timestamp);
+      let value = 0;
+      let invested = 0;
+      let updates = 0;
+
+      assets.forEach((asset) => {
+        const logs = getAssetLogs(asset).sort((left, right) => parseLogDateTime(left).getTime() - parseLogDateTime(right).getTime());
+        const activeLogs = logs.filter((log) => parseLogDateTime(log).getTime() <= timestamp);
+        const latestLog = activeLogs[activeLogs.length - 1] ?? logs[0];
+        value += (latestLog?.price ?? asset.currentPrice) * asset.quantity;
+        invested += asset.buyPrice * asset.quantity;
+        updates += logs.filter((log) => parseLogDateTime(log).getTime() === timestamp).length;
+      });
+
+      return {
+        timestamp: date.toISOString(),
+        label: formatMarketTime(date, selection.preset),
+        value,
+        invested,
+        updates,
+      };
+    });
+}
+
+export function calculateAssetDepreciation(asset: Asset, asOf = new Date()) {
+  const isPhysical = ['real_estate', 'vehicle', 'gold', 'other'].includes(asset.type);
+  if (!isPhysical) {
+    return null;
+  }
+
+  const salvageValue = asset.salvageValue ?? 0;
+  const usefulLifeYears = asset.usefulLifeYears ?? 0;
+  const purchaseDate = parseDate(asset.purchaseDate);
+  const elapsedYears = Math.max(0, (asOf.getTime() - purchaseDate.getTime()) / (365.25 * 86400000));
+  const annualRate = asset.annualDepreciationRate ?? (usefulLifeYears > 0 ? ((asset.buyPrice - salvageValue) / asset.buyPrice) * (100 / usefulLifeYears) : 0);
+
+  const annualDepreciation = usefulLifeYears > 0
+    ? Math.max(0, (asset.buyPrice - salvageValue) / usefulLifeYears)
+    : (asset.buyPrice * annualRate) / 100;
+  const accumulatedDepreciation = Math.min(
+    Math.max(0, asset.buyPrice - salvageValue),
+    annualDepreciation * elapsedYears
+  );
+  const bookValue = Math.max(salvageValue, asset.buyPrice - accumulatedDepreciation);
+  const marketDelta = asset.currentPrice - bookValue;
+  const progressPercent =
+    asset.buyPrice > salvageValue ? (accumulatedDepreciation / Math.max(1, asset.buyPrice - salvageValue)) * 100 : 0;
+
+  return {
+    annualRate,
+    annualDepreciation,
+    monthlyDepreciation: annualDepreciation / 12,
+    accumulatedDepreciation,
+    bookValue,
+    marketDelta,
+    salvageValue,
+    usefulLifeYears,
+    progressPercent: Math.min(100, progressPercent),
+  };
+}
+
+export function buildTimeframeAssetAllocation(assets: Asset[], range: ResolvedDateRange) {
+  const scopedAssets = assets.filter((asset) => asset.purchaseDate >= range.start && asset.purchaseDate <= range.end);
+  const useScopedPurchases = range.label !== 'All time';
+  const allocationSource = useScopedPurchases ? scopedAssets : assets;
+
+  const data = allocationSource.reduce((accumulator, asset) => {
+    const name = assetTypeLabel(asset);
+    const existing = accumulator.find((entry) => entry.name === name);
+    const value = useScopedPurchases ? asset.buyPrice * asset.quantity : asset.currentPrice * asset.quantity;
+
+    if (existing) {
+      existing.value += value;
+    } else {
+      accumulator.push({ name, value });
+    }
+
+    return accumulator;
+  }, [] as Array<{ name: string; value: number }>);
+
+  return {
+    data,
+    title: useScopedPurchases ? `Capital Allocated (${range.label})` : 'Asset Allocation',
+    subtitle: useScopedPurchases
+      ? scopedAssets.length > 0
+        ? `Based on assets added between ${range.start} and ${range.end}.`
+        : `No assets were added between ${range.start} and ${range.end}.`
+      : 'Current holdings grouped by asset type.',
+    emptyLabel: useScopedPurchases
+      ? 'No asset purchases were recorded in this range yet.'
+      : 'No assets recorded yet.',
+  };
+}
+
+export function buildSmartInsights({
+  accounts,
+  assets,
+  budgets,
+  categories,
+  defaultCurrency,
+  documents,
+  loans,
+  range,
+  recurringTemplates,
+  transactions,
+}: {
+  accounts: Account[];
+  assets: Asset[];
+  budgets: { amount: number; spent: number; alertThreshold: number; categoryId: string }[];
+  categories: Category[];
+  defaultCurrency: string;
+  documents: VaultDocument[];
+  loans: Loan[];
+  range: ResolvedDateRange;
+  recurringTemplates: RecurringTemplate[];
+  transactions: Transaction[];
+}): SmartInsight[] {
+  const insights: SmartInsight[] = [];
+  const rangeTransactions = filterTransactionsByRange(transactions, range);
+  const rangeSummary = summarizeTransactions(rangeTransactions);
+  const liquidAccounts = accounts.filter((account) => account.type === 'bank' || account.type === 'cash');
+  const lowBalanceFloor = Math.max(250, rangeSummary.expenses * 0.15);
+  const lowBalanceAccounts = liquidAccounts.filter((account) => account.balance <= lowBalanceFloor);
+
+  if (lowBalanceAccounts.length > 0) {
+    const account = lowBalanceAccounts[0];
+    insights.push({
+      id: `low-balance-${account.id}`,
+      title: 'Low balance warning',
+      message:
+        lowBalanceAccounts.length === 1
+          ? `${account.name} is down to ${formatCurrency(account.balance, account.currency)}.`
+          : `${lowBalanceAccounts.length} liquid accounts are near your low-balance threshold.`,
+      severity: 'warning',
+      module: 'finance',
+      actionRoute: '/finance',
+    });
+  }
+
+  const stressedBudgets = budgets
+    .map((budget) => ({
+      ...budget,
+      percentage: budget.amount > 0 ? (budget.spent / budget.amount) * 100 : 0,
+      name: categories.find((category) => category.id === budget.categoryId)?.name ?? 'Budget',
+    }))
+    .filter((budget) => budget.percentage >= budget.alertThreshold)
+    .sort((left, right) => right.percentage - left.percentage);
+
+  if (stressedBudgets.length > 0) {
+    const budget = stressedBudgets[0];
+    insights.push({
+      id: `budget-${budget.categoryId}`,
+      title: budget.percentage >= 100 ? 'Budget exceeded' : 'Budget nearly exhausted',
+      message: `${budget.name} is at ${budget.percentage.toFixed(0)}% of plan this month.`,
+      severity: budget.percentage >= 100 ? 'error' : 'warning',
+      module: 'finance',
+      actionRoute: '/finance',
+    });
+  }
+
+  const deductibleCandidates = rangeTransactions.filter(
+    (transaction) => transaction.taxTag === 'business' && !transaction.isDeductible
+  );
+  if (deductibleCandidates.length > 0) {
+    const total = deductibleCandidates.reduce((sum, transaction) => sum + transaction.amount, 0);
+    insights.push({
+      id: 'tax-opportunity',
+      title: 'Tax opportunity detected',
+      message: `${deductibleCandidates.length} business transaction${deductibleCandidates.length === 1 ? '' : 's'} worth ${formatCurrency(total, defaultCurrency)} still need deduction review.`,
+      severity: 'info',
+      module: 'tax',
+      actionRoute: '/tax',
+    });
+  }
+
+  const unlinkedTaxDocuments = documents.filter(
+    (document) => document.category === 'tax' && (!document.linkedEntityId || !document.linkedEntityType)
+  );
+  if (unlinkedTaxDocuments.length > 0) {
+    insights.push({
+      id: 'unlinked-tax-docs',
+      title: 'Tax documents need linking',
+      message: `${unlinkedTaxDocuments.length} tax document${unlinkedTaxDocuments.length === 1 ? '' : 's'} are still unlinked to a transaction, account, or asset.`,
+      severity: 'info',
+      module: 'tax',
+      actionRoute: '/vault',
+    });
+  }
+
+  const documentedAssetIds = new Set(
+    documents
+      .filter((document) => document.linkedEntityType === 'asset' && document.linkedEntityId)
+      .map((document) => document.linkedEntityId as string)
+  );
+  const undocumentedAssets = assets.filter((asset) => !documentedAssetIds.has(asset.id));
+  if (undocumentedAssets.length > 0) {
+    insights.push({
+      id: 'asset-doc-gap',
+      title: 'Asset documentation gap',
+      message: `${undocumentedAssets.length} asset${undocumentedAssets.length === 1 ? '' : 's'} do not have supporting documents in the vault.`,
+      severity: 'warning',
+      module: 'vault',
+      actionRoute: '/assets',
+    });
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const overdueRecurring = recurringTemplates.filter((template) => !template.isPaused && template.nextDate < today);
+  if (overdueRecurring.length > 0) {
+    insights.push({
+      id: 'overdue-recurring',
+      title: 'Recurring items are overdue',
+      message: `${overdueRecurring.length} recurring template${overdueRecurring.length === 1 ? '' : 's'} should have fired before today.`,
+      severity: 'warning',
+      module: 'finance',
+      actionRoute: '/finance',
+    });
+  }
+
+  const assetValue = assets.reduce((sum, asset) => sum + asset.currentPrice * asset.quantity, 0);
+  const cashValue = accounts.reduce((sum, account) => sum + account.balance, 0);
+  const liabilityValue = loans
+    .filter((loan) => loan.status === 'active')
+    .reduce((sum, loan) => sum + loan.outstandingAmount, 0);
+  const netWorth = cashValue + assetValue - liabilityValue;
+  const milestone = Math.floor(netWorth / 25000) * 25000;
+
+  if (milestone >= 25000) {
+    insights.push({
+      id: 'net-worth-milestone',
+      title: 'Net worth milestone',
+      message: `You are currently above the ${formatCurrency(milestone, defaultCurrency)} net-worth mark.`,
+      severity: 'success',
+      module: 'ledger',
+      actionRoute: '/ledger',
+    });
+  }
+
+  return insights.slice(0, 6);
 }

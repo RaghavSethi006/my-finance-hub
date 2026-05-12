@@ -5,6 +5,9 @@ export function requestCommandPaletteOpen() {
 }
 
 export function getCommandPaletteShortcutLabel() {
-  const platform = navigator.platform.toLowerCase();
+  const platform =
+    typeof navigator === "undefined"
+      ? ""
+      : `${navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || ""}`.toLowerCase();
   return platform.includes("mac") ? "Cmd K" : "Ctrl K";
 }
