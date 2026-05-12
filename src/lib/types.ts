@@ -98,9 +98,17 @@ export interface RecurringTemplate {
 export interface AssetValueLog {
   id: string;
   date: string;
+  timestamp?: string;
   price: number;
   note?: string;
   source: 'manual' | 'import' | 'system';
+}
+
+export interface AssetPriceSyncUpdate {
+  assetId: string;
+  price: number;
+  note?: string;
+  syncedAt: string;
 }
 
 export interface Asset {

@@ -1,6 +1,7 @@
 import { useFinOS } from "@/lib/store";
 import { formatCurrency } from "@/lib/currency";
 import { parseNaturalLanguageTransaction } from "@/lib/quick-add";
+import { StatementImportDialog } from "@/components/StatementImportDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -59,6 +60,7 @@ export default function FinancePage() {
     updateRecurringTemplate,
     deleteRecurringTemplate,
     addTransaction,
+    importTransactions,
     updateTransaction,
     deleteTransaction,
     addAccount,
@@ -373,6 +375,14 @@ export default function FinancePage() {
 
     setQuickAddInput('');
     toast.success(parsed.isRecurring ? 'Recurring transaction added from quick add' : 'Transaction added from quick add');
+  };
+
+  const handleStatementImport = (importedTransactions: Transaction[]) => {
+    if (importedTransactions.length === 0) {
+      return;
+    }
+
+    importTransactions(importedTransactions);
   };
 
   const saveTx = () => {
@@ -739,6 +749,12 @@ export default function FinancePage() {
           <p className="text-sm text-muted-foreground">Transactions, accounts, budgets, recurring schedules and categories</p>
         </div>
         <div className="flex gap-2">
+          <StatementImportDialog
+            accounts={accounts}
+            categories={categories}
+            defaultCurrency={settings.defaultCurrency}
+            onImport={handleStatementImport}
+          />
           <Button variant="outline" className="gap-2" onClick={() => handleQuickAdd('review')}>
             <Sparkles className="h-4 w-4" /> Quick Add
           </Button>

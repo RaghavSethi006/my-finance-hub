@@ -5,6 +5,7 @@ import type {
   AccountType,
   Alert,
   Asset,
+  AssetPriceSyncUpdate,
   AssetValueLog,
   Budget,
   Category,
@@ -95,6 +96,7 @@ interface FinOSState extends SerializableFinOSState {
   deleteRecurringTemplate: (id: string) => void;
   processDueRecurring: () => number;
   addTransaction: (tx: Transaction) => void;
+  importTransactions: (transactions: Transaction[]) => void;
   updateTransaction: (id: string, updates: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
   clearTransactions: () => void;
@@ -103,6 +105,7 @@ interface FinOSState extends SerializableFinOSState {
   deleteAccount: (id: string) => void;
   addAsset: (a: Asset) => void;
   addAssetValueLog: (assetId: string, log: Omit<AssetValueLog, 'id'> & { id?: string }) => void;
+  applyAssetPriceSync: (updates: AssetPriceSyncUpdate[]) => void;
   importAssets: (assets: Asset[]) => void;
   updateAsset: (id: string, updates: Partial<Asset>) => void;
   deleteAsset: (id: string) => void;
@@ -150,11 +153,13 @@ function buildAssetValueLog(
   price: number,
   source: AssetValueLog['source'],
   note?: string,
-  id = `asset-log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  id = `asset-log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  timestamp?: string
 ): AssetValueLog {
   return {
     id,
     date,
+    timestamp,
     price,
     note,
     source,
@@ -399,6 +404,34 @@ function normalizeData(data: DesktopSnapshot): SerializableFinOSState {
     budgets,
     assets,
     journalEntries,
+  };
+}
+
+function appendAssetPriceSync(asset: Asset, update: AssetPriceSyncUpdate): Asset {
+  const mergedAsset = normalizeAsset(asset);
+  const currentLogs = normalizeAssetValueLogs(mergedAsset);
+  const lastLog = currentLogs[currentLogs.length - 1];
+  const syncedDate = update.syncedAt.split('T')[0];
+
+  if (lastLog?.timestamp === update.syncedAt && lastLog.price === update.price) {
+    return {
+      ...mergedAsset,
+      currentPrice: update.price,
+      nav: mergedAsset.type === 'mutual_fund' ? update.price : mergedAsset.nav,
+      valueLogs: currentLogs,
+    };
+  }
+
+  const valueLog = buildAssetValueLog(syncedDate, update.price, 'system', update.note, undefined, update.syncedAt);
+  const nextLogs = [...currentLogs, valueLog].sort((left, right) =>
+    (left.timestamp ?? `${left.date}T00:00:00`).localeCompare(right.timestamp ?? `${right.date}T00:00:00`)
+  );
+
+  return {
+    ...mergedAsset,
+    currentPrice: update.price,
+    nav: mergedAsset.type === 'mutual_fund' ? update.price : mergedAsset.nav,
+    valueLogs: nextLogs,
   };
 }
 
@@ -777,6 +810,35 @@ export const useFinOS = create<FinOSState>()(
           syncToDesktop('transaction.add', { id: transaction.id, type: transaction.type, amount: transaction.amount });
         },
 
+        importTransactions: (importedTransactions) => {
+          if (importedTransactions.length === 0) {
+            return;
+          }
+
+          set((state) => {
+            let accounts = [...state.accounts];
+            let transactions = [...state.transactions];
+            let journalEntries = [...state.journalEntries];
+
+            importedTransactions.forEach((transaction) => {
+              accounts = applyTransactionImpact(accounts, transaction, 1);
+              transactions = [transaction, ...transactions];
+              journalEntries = [buildJournalEntry(transaction, accounts, state.categories), ...journalEntries];
+            });
+
+            const sortedTransactions = [...transactions].sort((left, right) => right.date.localeCompare(left.date));
+            const sortedEntries = [...journalEntries].sort((left, right) => right.date.localeCompare(left.date));
+
+            return {
+              accounts,
+              transactions: sortedTransactions,
+              budgets: recalculateBudgets(sortedTransactions, state.budgets),
+              journalEntries: sortedEntries,
+            };
+          });
+          syncToDesktop('transaction.import_statement', { count: importedTransactions.length });
+        },
+
         updateTransaction: (id, updates) => {
           set((state) => {
             const existing = state.transactions.find((transaction) => transaction.id === id);
@@ -884,6 +946,21 @@ export const useFinOS = create<FinOSState>()(
             }),
           }));
           syncToDesktop('asset.value_log.add', { assetId, date: log.date, price: log.price, source: log.source });
+        },
+
+        applyAssetPriceSync: (updates) => {
+          if (updates.length === 0) {
+            return;
+          }
+
+          const updateMap = new Map(updates.map((update) => [update.assetId, update]));
+          set((state) => ({
+            assets: state.assets.map((asset) => {
+              const update = updateMap.get(asset.id);
+              return update ? appendAssetPriceSync(asset, update) : asset;
+            }),
+          }));
+          syncToDesktop('asset.market_price_sync', { count: updates.length });
         },
 
         importAssets: (assets) => {
