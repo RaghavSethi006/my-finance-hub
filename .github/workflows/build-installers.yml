@@ -33,15 +33,19 @@ jobs:
           - label: Windows installer
             platform: windows-latest
             args: ""
+            artifact: windows
           - label: macOS Apple Silicon DMG
             platform: macos-latest
             args: "--target aarch64-apple-darwin"
+            artifact: macos-aarch64
           - label: macOS Intel DMG
             platform: macos-latest
             args: "--target x86_64-apple-darwin"
+            artifact: macos-x86_64
           - label: Linux bundles
             platform: ubuntu-22.04
             args: ""
+            artifact: linux
 
     runs-on: ${{ matrix.platform }}
 
@@ -70,15 +74,22 @@ jobs:
         run: npm ci
 
       - name: Build installers as workflow artifacts
+        id: build-artifacts
         if: inputs.create_release != 'true'
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tauriScript: npm run tauri
           args: ${{ matrix.args }}
-          uploadWorkflowArtifacts: true
-          workflowArtifactNamePattern: "Aurum-[platform]-[arch]-[bundle]"
-          releaseAssetNamePattern: "Aurum-[version]-[platform]-[arch]-[bundle][setup][ext]"
+
+      - name: Upload installer artifacts
+        if: inputs.create_release != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aurum-${{ matrix.artifact }}
+          path: src-tauri/target/release/bundle/**/*
+          if-no-files-found: error
 
       - name: Build installers and draft release
         if: inputs.create_release == 'true'
@@ -86,12 +97,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tauriScript: npm run tauri
           args: ${{ matrix.args }}
           releaseDraft: true
           prerelease: false
-          uploadWorkflowArtifacts: true
-          workflowArtifactNamePattern: "Aurum-[platform]-[arch]-[bundle]"
-          releaseAssetNamePattern: "Aurum-[version]-[platform]-[arch]-[bundle][setup][ext]"
+          assetNamePattern: "Aurum-[version]-[platform]-[arch]-[bundle][setup][ext]"
           tagName: ${{ inputs.release_tag }}
           releaseName: ${{ inputs.release_name }}
           releaseBody: "Aurum desktop installers built from ${{ github.sha }}."
