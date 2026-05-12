@@ -78,6 +78,15 @@ export async function exportEncryptedBackup(password: string): Promise<number[]>
   });
 }
 
+export async function importEncryptedBackup(password: string, bytes: number[]): Promise<DesktopSnapshot> {
+  return invokeDesktop<DesktopSnapshot>('import_encrypted_backup', {
+    payload: {
+      password,
+      bytes,
+    },
+  });
+}
+
 export async function getSecurityStatus(): Promise<DesktopSecurityStatus> {
   return invokeDesktop<DesktopSecurityStatus>('get_security_status');
 }

@@ -1,4 +1,8 @@
-use std::io::{Cursor, Write};
+use std::{
+  fs,
+  io::{Cursor, Read, Write},
+  path::Path,
+};
 
 use log::{debug, error, info, warn};
 use rusqlite::Connection;
@@ -10,6 +14,7 @@ use super::{
     AppSnapshot,
     DesktopPaths,
     ExportEncryptedBackupPayload,
+    ImportEncryptedBackupPayload,
     ImportVaultDocumentPayload,
     SecurityStatus,
     SetAppPinPayload,
@@ -310,6 +315,20 @@ pub fn export_encrypted_backup(
   Ok(encrypted)
 }
 
+#[tauri::command]
+pub fn import_encrypted_backup(
+  payload: ImportEncryptedBackupPayload,
+  state: State<'_, AppState>,
+) -> Result<AppSnapshot, String> {
+  info!("import_encrypted_backup requested bytes={}", payload.bytes.len());
+  let archive = security::decrypt_backup_bytes(&payload.password, &payload.bytes)?;
+  let snapshot = restore_backup_archive(&state, &archive)?;
+  let mut conn = open_connection(&state)?;
+  replace_snapshot(&mut conn, &snapshot)?;
+  info!("import_encrypted_backup succeeded {}", summarize_snapshot(&snapshot));
+  Ok(snapshot)
+}
+
 fn summarize_snapshot(snapshot: &AppSnapshot) -> String {
   format!(
     "accounts={} transactions={} recurring={} assets={} loans={} documents={} alerts={}",
@@ -377,4 +396,67 @@ fn sanitize_snapshot_for_backup(mut snapshot: AppSnapshot) -> AppSnapshot {
     document.file_path = None;
   }
   snapshot
+}
+
+fn restore_backup_archive(state: &AppState, archive: &[u8]) -> Result<AppSnapshot, String> {
+  let reader = Cursor::new(archive);
+  let mut zip = zip::ZipArchive::new(reader).map_err(|error| format!("Unable to open encrypted backup archive: {error}"))?;
+  let mut snapshot_json = Vec::new();
+  zip
+    .by_name("snapshot.json")
+    .map_err(|error| format!("Encrypted backup snapshot is missing: {error}"))?
+    .read_to_end(&mut snapshot_json)
+    .map_err(|error| format!("Unable to read encrypted backup snapshot: {error}"))?;
+
+  let mut snapshot: AppSnapshot =
+    serde_json::from_slice(&snapshot_json).map_err(|error| format!("Unable to parse encrypted backup snapshot: {error}"))?;
+  let mut restored_documents = Vec::with_capacity(snapshot.documents.len());
+
+  for document in &mut snapshot.documents {
+    let extension = document.file_type.to_lowercase();
+    let entry_name = format!("vault/{}.{}", document.id, extension);
+    let mut file = zip
+      .by_name(&entry_name)
+      .map_err(|error| format!("Encrypted backup is missing vault file for {}: {error}", document.name))?;
+    let mut bytes = Vec::new();
+    file
+      .read_to_end(&mut bytes)
+      .map_err(|error| format!("Unable to read vault file for {}: {error}", document.name))?;
+    restored_documents.push((document.id.clone(), extension, bytes));
+  }
+
+  clear_directory(&state.vault_dir)?;
+
+  for document in &mut snapshot.documents {
+    let (document_id, extension, bytes) = restored_documents
+      .iter()
+      .find(|(document_id, _, _)| document_id == &document.id)
+      .ok_or_else(|| format!("Restored file payload is missing for {}", document.name))?;
+    let path = state.vault_dir.join(format!("{document_id}.{extension}"));
+    fs::write(&path, bytes).map_err(|error| format!("Unable to restore vault file for {}: {error}", document.name))?;
+    document.file_path = Some(path.to_string_lossy().to_string());
+  }
+
+  Ok(snapshot)
+}
+
+fn clear_directory(path: &Path) -> Result<(), String> {
+  if !path.exists() {
+    fs::create_dir_all(path).map_err(|error| format!("Unable to create backup restore directory: {error}"))?;
+    return Ok(());
+  }
+
+  for entry in fs::read_dir(path).map_err(|error| format!("Unable to inspect backup restore directory: {error}"))? {
+    let entry = entry.map_err(|error| format!("Unable to inspect backup restore entry: {error}"))?;
+    let entry_path = entry.path();
+    if entry_path.is_dir() {
+      fs::remove_dir_all(&entry_path)
+        .map_err(|error| format!("Unable to remove backup restore directory {}: {error}", entry_path.display()))?;
+    } else {
+      fs::remove_file(&entry_path)
+        .map_err(|error| format!("Unable to remove backup restore file {}: {error}", entry_path.display()))?;
+    }
+  }
+
+  Ok(())
 }

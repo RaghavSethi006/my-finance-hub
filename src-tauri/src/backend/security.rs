@@ -287,6 +287,23 @@ pub fn encrypt_backup_bytes(password: &str, plaintext: &[u8]) -> Result<Vec<u8>,
   Ok(encoded)
 }
 
+pub fn decrypt_backup_bytes(password: &str, ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+  validate_password(password)?;
+  if ciphertext.len() <= BACKUP_MAGIC.len() + 16 + NONCE_LENGTH || &ciphertext[..BACKUP_MAGIC.len()] != BACKUP_MAGIC {
+    return Err(String::from("Encrypted backup format is invalid"));
+  }
+
+  let salt = &ciphertext[BACKUP_MAGIC.len()..BACKUP_MAGIC.len() + 16];
+  let key = derive_key(password, salt);
+  decrypt_bytes_with_magic(
+    ciphertext,
+    &key,
+    BACKUP_MAGIC,
+    16,
+    "Unable to decrypt encrypted backup. The password may be incorrect.",
+  )
+}
+
 fn build_status(conn: &Connection, state: &AppState) -> Result<SecurityStatus, String> {
   let config = load_security_config(conn)?;
   let now = now_unix_timestamp();
@@ -368,11 +385,29 @@ fn decrypt_bytes_with_key(ciphertext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, 
     return Err(String::from("Vault file is not encrypted with the current format"));
   }
 
+  decrypt_bytes_with_magic(
+    ciphertext,
+    key,
+    FILE_MAGIC,
+    0,
+    "Unable to decrypt vault document. The vault password may be incorrect.",
+  )
+}
+
+fn decrypt_bytes_with_magic(
+  ciphertext: &[u8],
+  key: &[u8; 32],
+  magic: &[u8; 4],
+  salt_length: usize,
+  error_message: &str,
+) -> Result<Vec<u8>, String> {
   let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| String::from("Invalid encryption key"))?;
-  let nonce = Nonce::from_slice(&ciphertext[FILE_MAGIC.len()..FILE_MAGIC.len() + NONCE_LENGTH]);
+  let nonce_start = magic.len() + salt_length;
+  let nonce_end = nonce_start + NONCE_LENGTH;
+  let nonce = Nonce::from_slice(&ciphertext[nonce_start..nonce_end]);
   cipher
-    .decrypt(nonce, &ciphertext[FILE_MAGIC.len() + NONCE_LENGTH..])
-    .map_err(|_| String::from("Unable to decrypt vault document. The vault password may be incorrect."))
+    .decrypt(nonce, &ciphertext[nonce_end..])
+    .map_err(|_| String::from(error_message))
 }
 
 fn is_encrypted_file(bytes: &[u8]) -> bool {

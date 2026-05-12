@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { exportEncryptedBackup, getDesktopPaths, isTauriDesktop } from "@/lib/desktop";
+import { exportEncryptedBackup, getDesktopPaths, importEncryptedBackup, isTauriDesktop } from "@/lib/desktop";
 import type { DesktopPaths } from "@/lib/types";
 import { useSearchParams } from "react-router-dom";
 
@@ -41,6 +41,7 @@ export default function SettingsPage() {
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
   const [vaultDialogOpen, setVaultDialogOpen] = useState(false);
   const [backupDialogOpen, setBackupDialogOpen] = useState(false);
+  const [backupImportDialogOpen, setBackupImportDialogOpen] = useState(false);
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
@@ -51,7 +52,12 @@ export default function SettingsPage() {
   const [backupPassword, setBackupPassword] = useState('');
   const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
   const [isExportingBackup, setIsExportingBackup] = useState(false);
+  const [isImportingBackup, setIsImportingBackup] = useState(false);
+  const [backupImportPassword, setBackupImportPassword] = useState('');
+  const [pendingEncryptedBackupBytes, setPendingEncryptedBackupBytes] = useState<number[] | null>(null);
+  const [pendingEncryptedBackupName, setPendingEncryptedBackupName] = useState('');
   const importRef = useRef<HTMLInputElement>(null);
+  const encryptedImportRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isTauriDesktop()) {
@@ -96,7 +102,7 @@ export default function SettingsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `finos-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `aurum-backup-${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
     toast.success('Data exported as JSON');
@@ -130,7 +136,7 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `finos-${file.name}`;
+      a.download = `aurum-${file.name}`;
       a.click();
       URL.revokeObjectURL(url);
     });
@@ -153,6 +159,19 @@ export default function SettingsPage() {
     };
     reader.readAsText(file);
     if (importRef.current) importRef.current.value = '';
+  };
+
+  const handleEncryptedBackupSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const buffer = await file.arrayBuffer();
+    setPendingEncryptedBackupBytes(Array.from(new Uint8Array(buffer)));
+    setPendingEncryptedBackupName(file.name);
+    setBackupImportDialogOpen(true);
+    event.target.value = '';
   };
 
   const handleFullReset = () => {
@@ -252,7 +271,7 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = `finos-encrypted-backup-${new Date().toISOString().split('T')[0]}.zip.enc`;
+      anchor.download = `aurum-encrypted-backup-${new Date().toISOString().split('T')[0]}.zip.enc`;
       anchor.click();
       URL.revokeObjectURL(url);
 
@@ -265,6 +284,37 @@ export default function SettingsPage() {
       toast.error(error instanceof Error ? error.message : 'Failed to export encrypted backup');
     } finally {
       setIsExportingBackup(false);
+    }
+  };
+
+  const handleImportEncryptedBackup = async () => {
+    if (!pendingEncryptedBackupBytes) {
+      toast.error('Choose an encrypted backup file first');
+      return;
+    }
+    if (!backupImportPassword.trim()) {
+      toast.error('Enter the encrypted backup password');
+      return;
+    }
+
+    setIsImportingBackup(true);
+    try {
+      const snapshot = await importEncryptedBackup(backupImportPassword, pendingEncryptedBackupBytes);
+      const imported = importAllData(JSON.stringify(snapshot));
+      if (!imported) {
+        throw new Error('The restored backup payload could not be loaded into Aurum');
+      }
+
+      toast.success('Encrypted backup restored');
+      setBackupImportDialogOpen(false);
+      setBackupImportPassword('');
+      setPendingEncryptedBackupBytes(null);
+      setPendingEncryptedBackupName('');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Failed to restore encrypted backup');
+    } finally {
+      setIsImportingBackup(false);
     }
   };
 
@@ -443,10 +493,27 @@ export default function SettingsPage() {
           <div>
             <p className="text-sm font-medium mb-2">Import</p>
             <input ref={importRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+            <input
+              ref={encryptedImportRef}
+              type="file"
+              accept=".enc,.backup,.zip.enc,.bak"
+              className="hidden"
+              onChange={(event) => void handleEncryptedBackupSelection(event)}
+            />
             <Button variant="outline" size="sm" className="gap-2" onClick={() => importRef.current?.click()}>
               <Upload className="h-3.5 w-3.5" /> Import JSON Backup
             </Button>
+            {isTauriDesktop() && (
+              <Button variant="outline" size="sm" className="ml-2 gap-2" onClick={() => encryptedImportRef.current?.click()}>
+                <Lock className="h-3.5 w-3.5" /> Restore Encrypted Backup
+              </Button>
+            )}
             <p className="text-xs text-muted-foreground mt-1">Import a previously exported JSON backup to restore all data.</p>
+            {isTauriDesktop() && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Encrypted restore brings back the desktop snapshot and vault files from a password-protected backup archive.
+              </p>
+            )}
           </div>
 
           {desktopPaths && (
@@ -603,6 +670,35 @@ export default function SettingsPage() {
             <Button variant="outline" onClick={() => setBackupDialogOpen(false)}>Cancel</Button>
             <Button onClick={() => void handleExportEncryptedBackup()} disabled={isExportingBackup}>
               {isExportingBackup ? 'Exporting...' : 'Export Backup'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={backupImportDialogOpen} onOpenChange={setBackupImportDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Restore Encrypted Backup</DialogTitle>
+            <DialogDescription>
+              Enter the password used when exporting this backup. Restoring will replace the current desktop snapshot and vault files.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input value={pendingEncryptedBackupName} readOnly className="text-xs" />
+            <Input
+              type="password"
+              placeholder="Backup password"
+              value={backupImportPassword}
+              onChange={(event) => setBackupImportPassword(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              This restore is end-to-end encrypted. Aurum cannot recover the password if you forget it.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBackupImportDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => void handleImportEncryptedBackup()} disabled={isImportingBackup}>
+              {isImportingBackup ? 'Restoring...' : 'Restore Backup'}
             </Button>
           </DialogFooter>
         </DialogContent>
