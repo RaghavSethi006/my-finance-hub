@@ -10,9 +10,10 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { buildAssetValueSeries, buildPortfolioHistory, calculateAssetDepreciation } from "@/lib/analytics";
+import { MarketRangePreset, buildAssetValueSeries, buildPortfolioMarketSeries, calculateAssetDepreciation } from "@/lib/analytics";
 import { parseAssetCsv } from "@/lib/asset-import";
 import { formatCurrency, formatPercent } from "@/lib/currency";
+import { syncMarketPrices } from "@/lib/market-data";
 import { useFinOS } from "@/lib/store";
 import { Asset, AssetType, AssetValueLog, Currency, CURRENCY_CONFIG, VaultDocument } from "@/lib/types";
 import {
@@ -30,6 +31,7 @@ import {
   LineChart as LineIcon,
   PieChart as PieIcon,
   Plus,
+  RefreshCw,
   ShieldCheck,
   TrendingDown,
   TrendingUp,
@@ -37,7 +39,7 @@ import {
   Upload,
   Wallet,
 } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, Bar, CartesianGrid, Cell, ComposedChart, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -83,6 +85,16 @@ const assetTypeLabels: Record<AssetType, string> = {
 };
 
 const PHYSICAL_ASSET_TYPES: AssetType[] = ["real_estate", "vehicle", "gold", "other"];
+const MARKET_RANGES: Array<{ value: MarketRangePreset; label: string }> = [
+  { value: "live", label: "Live" },
+  { value: "1h", label: "1H" },
+  { value: "1d", label: "1D" },
+  { value: "1w", label: "1W" },
+  { value: "1m", label: "1M" },
+  { value: "1y", label: "1Y" },
+  { value: "all", label: "All" },
+  { value: "custom", label: "Custom" },
+];
 
 const initialAssetForm = {
   name: "",
@@ -109,8 +121,7 @@ function generateId(prefix: string) {
 export default function AssetsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { assets, loans, documents, settings, addAsset, addAssetValueLog, importAssets, updateAsset, deleteAsset } = useFinOS();
-  const portfolioHistory = buildPortfolioHistory(assets);
+  const { assets, loans, documents, settings, addAsset, addAssetValueLog, applyAssetPriceSync, importAssets, updateAsset, deleteAsset } = useFinOS();
   const totalValue = useFinOS((state) => state.totalPortfolioValue());
   const totalCost = useFinOS((state) => state.totalPortfolioCost());
   const totalLoanOutstanding = useFinOS((state) => state.totalLoanOutstanding());
@@ -128,7 +139,15 @@ export default function AssetsPage() {
     note: "",
   });
   const [activeTab, setActiveTab] = useState<string>(() => searchParams.get("tab") || "overview");
+  const [marketRange, setMarketRange] = useState<MarketRangePreset>("1m");
+  const [marketCustomRange, setMarketCustomRange] = useState({
+    start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+    end: new Date().toISOString().split("T")[0],
+  });
+  const [isSyncingMarketPrices, setIsSyncingMarketPrices] = useState(false);
+  const [lastMarketSyncAt, setLastMarketSyncAt] = useState<string | null>(null);
   const csvImportRef = useRef<HTMLInputElement>(null);
+  const latestAssetsRef = useRef(assets);
 
   const totalPL = totalValue - totalCost;
   const plPercent = totalCost > 0 ? (totalPL / totalCost) * 100 : 0;
@@ -157,8 +176,15 @@ export default function AssetsPage() {
   );
 
   const selectedAssetValueSeries = useMemo(
-    () => (selectedAsset ? buildAssetValueSeries(selectedAsset) : []),
-    [selectedAsset]
+    () =>
+      selectedAsset
+        ? buildAssetValueSeries(selectedAsset, {
+            preset: marketRange,
+            customStart: marketCustomRange.start,
+            customEnd: marketCustomRange.end,
+          })
+        : [],
+    [marketCustomRange.end, marketCustomRange.start, marketRange, selectedAsset]
   );
 
   const selectedAssetDepreciation = useMemo(
@@ -167,8 +193,18 @@ export default function AssetsPage() {
   );
 
   const selectedAssetLogTimeline = useMemo(
-    () => [...selectedAssetValueSeries].sort((left, right) => right.date.localeCompare(left.date)),
+    () => [...selectedAssetValueSeries].sort((left, right) => right.timestamp.localeCompare(left.timestamp)),
     [selectedAssetValueSeries]
+  );
+
+  const marketSeries = useMemo(
+    () =>
+      buildPortfolioMarketSeries(assets, {
+        preset: marketRange,
+        customStart: marketCustomRange.start,
+        customEnd: marketCustomRange.end,
+      }),
+    [assets, marketCustomRange.end, marketCustomRange.start, marketRange]
   );
 
   const allocation = useMemo(() => {
@@ -202,6 +238,16 @@ export default function AssetsPage() {
   const physicalValue = physicalAssets.reduce((sum, asset) => sum + asset.currentPrice * asset.quantity, 0);
   const physicalCost = physicalAssets.reduce((sum, asset) => sum + asset.buyPrice * asset.quantity, 0);
   const totalEmi = loans.filter((loan) => loan.status === "active").reduce((sum, loan) => sum + loan.emi, 0);
+  const trackableAssetCount = assets.filter((asset) => ["stock", "mutual_fund", "crypto"].includes(asset.type) && asset.ticker).length;
+  const marketStartValue = marketSeries[0]?.value ?? totalValue;
+  const marketEndValue = marketSeries[marketSeries.length - 1]?.value ?? totalValue;
+  const marketMove = marketEndValue - marketStartValue;
+  const marketMovePercent = marketStartValue > 0 ? (marketMove / marketStartValue) * 100 : 0;
+  const latestMarketPoint = marketSeries[marketSeries.length - 1];
+
+  useEffect(() => {
+    latestAssetsRef.current = assets;
+  }, [assets]);
 
   const resetValueLogForm = (asset?: Asset) => {
     setValueLogForm({
@@ -289,14 +335,93 @@ export default function AssetsPage() {
     setSearchParams(nextParams, { replace: true });
 
     if (action === "add-asset") {
-      openAddAsset();
+      setEditingAsset(null);
+      setAssetForm({
+        ...initialAssetForm,
+        currency: settings.defaultCurrency,
+        purchaseDate: new Date().toISOString().split("T")[0],
+      });
+      setAssetModalOpen(true);
       return;
     }
 
     if (action === "import-csv") {
       csvImportRef.current?.click();
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, settings.defaultCurrency]);
+
+  const handleRefreshMarketPrices = async (silent = false) => {
+    if (isSyncingMarketPrices) {
+      return;
+    }
+
+    setIsSyncingMarketPrices(true);
+    try {
+      const result = await syncMarketPrices(assets);
+      if (result.updates.length > 0) {
+        applyAssetPriceSync(result.updates);
+        setLastMarketSyncAt(new Date().toISOString());
+        if (!silent) {
+          toast.success(`Synced ${result.updates.length} live market price${result.updates.length === 1 ? "" : "s"}`);
+        }
+      } else if (!silent) {
+        toast.info(result.warnings[0] ?? "No live market prices could be synced for the current assets");
+      }
+
+      if (result.warnings.length > 0 && !silent) {
+        toast.warning(result.warnings[0]);
+      }
+    } catch (error) {
+      console.error(error);
+      if (!silent) {
+        toast.error(error instanceof Error ? error.message : "Failed to sync live market prices");
+      }
+    } finally {
+      setIsSyncingMarketPrices(false);
+    }
+  };
+
+  useEffect(() => {
+    if (trackableAssetCount === 0) {
+      return;
+    }
+
+    let lastFocusSync = 0;
+    const silentRefresh = async () => {
+      try {
+        const result = await syncMarketPrices(latestAssetsRef.current);
+        if (result.updates.length > 0) {
+          applyAssetPriceSync(result.updates);
+          setLastMarketSyncAt(new Date().toISOString());
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    };
+
+    void silentRefresh();
+
+    const refreshInterval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void silentRefresh();
+      }
+    }, 90 * 1000);
+
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusSync < 5 * 60 * 1000) {
+        return;
+      }
+      lastFocusSync = now;
+      void silentRefresh();
+    };
+
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(refreshInterval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [applyAssetPriceSync, trackableAssetCount]);
 
   const handleSaveAsset = () => {
     const quantity = parseFloat(assetForm.quantity);
@@ -516,12 +641,47 @@ export default function AssetsPage() {
     );
   };
 
-  const formatLogDate = (date: string) =>
-    new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
+  const formatLogDate = (date: string, timestamp?: string) =>
+    new Date(timestamp ?? `${date}T00:00:00`).toLocaleString(undefined, {
       month: "short",
       day: "numeric",
       year: "numeric",
+      hour: timestamp ? "numeric" : undefined,
+      minute: timestamp ? "2-digit" : undefined,
     });
+
+  const renderMarketRangeControls = () => (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {MARKET_RANGES.map((range) => (
+        <Button
+          key={range.value}
+          type="button"
+          variant={marketRange === range.value ? "default" : "outline"}
+          size="sm"
+          className="h-7 px-2.5 text-[11px] font-semibold"
+          onClick={() => setMarketRange(range.value)}
+        >
+          {range.label}
+        </Button>
+      ))}
+      {marketRange === "custom" && (
+        <div className="flex items-center gap-2 pl-1">
+          <Input
+            type="date"
+            value={marketCustomRange.start}
+            className="h-7 w-[132px] text-xs"
+            onChange={(event) => setMarketCustomRange((current) => ({ ...current, start: event.target.value }))}
+          />
+          <Input
+            type="date"
+            value={marketCustomRange.end}
+            className="h-7 w-[132px] text-xs"
+            onChange={(event) => setMarketCustomRange((current) => ({ ...current, end: event.target.value }))}
+          />
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
@@ -532,6 +692,15 @@ export default function AssetsPage() {
           <p className="text-sm text-muted-foreground">Complete portfolio: investments, assets, and liabilities</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={() => void handleRefreshMarketPrices()}
+            disabled={isSyncingMarketPrices || trackableAssetCount === 0}
+          >
+            <RefreshCw className={`h-4 w-4 ${isSyncingMarketPrices ? "animate-spin" : ""}`} />
+            {isSyncingMarketPrices ? "Syncing..." : "Live Sync"}
+          </Button>
           <Button variant="outline" className="gap-2" onClick={() => csvImportRef.current?.click()}>
             <Upload className="h-4 w-4" /> Import CSV
           </Button>
@@ -540,6 +709,13 @@ export default function AssetsPage() {
           </Button>
         </div>
       </div>
+
+      {trackableAssetCount > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Live sync covers {trackableAssetCount} asset{trackableAssetCount === 1 ? "" : "s"} with ticker symbols.
+          {lastMarketSyncAt ? ` Last synced ${new Date(lastMarketSyncAt).toLocaleString()}.` : " Prices refresh on load, focus, and every 90 seconds while this page is visible."}
+        </p>
+      )}
 
       <Tabs
         value={activeTab}
@@ -629,35 +805,85 @@ export default function AssetsPage() {
               </CardContent>
             </Card>
 
-            <Card className="lg:col-span-2">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Portfolio Growth</CardTitle>
+            <Card className="overflow-hidden lg:col-span-2">
+              <CardHeader className="border-b pb-3">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-sm">
+                      <LineIcon className="h-4 w-4 text-primary" />
+                      Market Performance
+                    </CardTitle>
+                    <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="font-mono text-2xl font-bold">{formatCurrency(marketEndValue, settings.defaultCurrency)}</span>
+                      <span className={`font-mono text-sm font-semibold ${marketMove >= 0 ? "text-profit" : "text-loss"}`}>
+                        {marketMove >= 0 ? "+" : ""}
+                        {formatCurrency(marketMove, settings.defaultCurrency)} ({formatPercent(marketMovePercent)})
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {latestMarketPoint ? `Latest plotted quote ${new Date(latestMarketPoint.timestamp).toLocaleString()}` : "Waiting for market data."}
+                    </p>
+                  </div>
+                  {renderMarketRangeControls()}
+                </div>
               </CardHeader>
-              <CardContent>
-                <div className="h-[260px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={portfolioHistory}>
-                      <defs>
-                        <linearGradient id="portVal" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="hsl(220, 70%, 50%)" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="hsl(220, 70%, 50%)" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="portInv" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="hsl(152, 60%, 40%)" stopOpacity={0.2} />
-                          <stop offset="95%" stopColor="hsl(152, 60%, 40%)" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis dataKey="month" tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} tickFormatter={(value) => `$${(value / 1000).toFixed(0)}K`} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: "12px" }}
-                        formatter={(value: number) => [formatCurrency(value, settings.defaultCurrency), ""]}
-                      />
-                      <Area type="monotone" dataKey="value" stroke="hsl(220, 70%, 50%)" fill="url(#portVal)" strokeWidth={2} name="Value" />
-                      <Area type="monotone" dataKey="invested" stroke="hsl(152, 60%, 40%)" fill="url(#portInv)" strokeWidth={2} name="Invested" strokeDasharray="5 5" />
-                    </AreaChart>
-                  </ResponsiveContainer>
+              <CardContent className="pt-4">
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_180px]">
+                  <div className="h-[300px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={marketSeries} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="marketValueFill" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={marketMove >= 0 ? "hsl(var(--profit))" : "hsl(var(--loss))"} stopOpacity={0.32} />
+                            <stop offset="95%" stopColor={marketMove >= 0 ? "hsl(var(--profit))" : "hsl(var(--loss))"} stopOpacity={0.02} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeDasharray="3 3" />
+                        <XAxis dataKey="label" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} minTickGap={18} />
+                        <YAxis
+                          yAxisId="value"
+                          tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                          axisLine={false}
+                          tickLine={false}
+                          width={58}
+                          tickFormatter={(value) => `${CURRENCY_CONFIG[settings.defaultCurrency].symbol}${(Number(value) / 1000).toFixed(0)}K`}
+                        />
+                        <YAxis yAxisId="activity" orientation="right" hide />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: "12px" }}
+                          labelFormatter={(_, payload) => (payload?.[0]?.payload?.timestamp ? new Date(payload[0].payload.timestamp).toLocaleString() : "")}
+                          formatter={(value: number, name: string) =>
+                            name === "Quote updates"
+                              ? [`${value} update${value === 1 ? "" : "s"}`, name]
+                              : [formatCurrency(value, settings.defaultCurrency), name]
+                          }
+                        />
+                        <Bar yAxisId="activity" dataKey="updates" name="Quote updates" fill="hsl(var(--primary) / 0.18)" barSize={18} radius={[3, 3, 0, 0]} />
+                        <Area yAxisId="value" type="monotone" dataKey="value" name="Market value" stroke={marketMove >= 0 ? "hsl(var(--profit))" : "hsl(var(--loss))"} strokeWidth={2.5} fill="url(#marketValueFill)" />
+                        <Line yAxisId="value" type="monotone" dataKey="invested" name="Invested" stroke="hsl(var(--muted-foreground))" strokeDasharray="5 5" dot={false} strokeWidth={1.5} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 xl:grid-cols-1">
+                    <div className="rounded-lg border bg-secondary/20 p-3">
+                      <span className="text-[11px] text-muted-foreground">Range high</span>
+                      <p className="mt-1 font-mono text-sm font-semibold">
+                        {formatCurrency(Math.max(...marketSeries.map((point) => point.value), marketEndValue), settings.defaultCurrency)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border bg-secondary/20 p-3">
+                      <span className="text-[11px] text-muted-foreground">Range low</span>
+                      <p className="mt-1 font-mono text-sm font-semibold">
+                        {formatCurrency(Math.min(...marketSeries.map((point) => point.value), marketEndValue), settings.defaultCurrency)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border bg-secondary/20 p-3">
+                      <span className="text-[11px] text-muted-foreground">Quote events</span>
+                      <p className="mt-1 font-mono text-sm font-semibold">
+                        {marketSeries.reduce((sum, point) => sum + point.updates, 0)}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -864,7 +1090,7 @@ export default function AssetsPage() {
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingAsset ? "Edit Asset" : "Add Asset"}</DialogTitle>
-            <DialogDescription>Capture the details you want FinOS to track for this holding.</DialogDescription>
+            <DialogDescription>Capture the details you want Aurum to track for this holding.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -946,7 +1172,7 @@ export default function AssetsPage() {
               <div className="space-y-3 rounded-xl border bg-secondary/20 p-4">
                 <div>
                   <p className="text-sm font-medium">Depreciation Assumptions</p>
-                  <p className="text-xs text-muted-foreground">Optional inputs for physical holdings so FinOS can estimate book value over time.</p>
+                  <p className="text-xs text-muted-foreground">Optional inputs for physical holdings so Aurum can estimate book value over time.</p>
                 </div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   <div>
@@ -1076,8 +1302,9 @@ export default function AssetsPage() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium">Value Timeline</p>
-                    <p className="text-xs text-muted-foreground">Manual logs and system snapshots feed the current valuation.</p>
+                    <p className="text-xs text-muted-foreground">Timestamped quote logs power the same market range selected above.</p>
                   </div>
+                  {renderMarketRangeControls()}
                   <Badge variant="secondary" className="text-[10px]">
                     {selectedAssetLogTimeline.length} point{selectedAssetLogTimeline.length === 1 ? "" : "s"}
                   </Badge>
@@ -1101,7 +1328,7 @@ export default function AssetsPage() {
                       />
                       <Tooltip
                         formatter={(value: number) => formatCurrency(value, selectedAsset.currency)}
-                        labelFormatter={(_, payload) => (payload?.[0]?.payload?.date ? formatLogDate(payload[0].payload.date) : "")}
+                        labelFormatter={(_, payload) => (payload?.[0]?.payload?.date ? formatLogDate(payload[0].payload.date, payload[0].payload.timestamp) : "")}
                       />
                       <Area type="monotone" dataKey="totalValue" stroke="hsl(var(--primary))" strokeWidth={2} fill="url(#asset-history-fill)" />
                     </AreaChart>
@@ -1321,7 +1548,7 @@ export default function AssetsPage() {
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Delete Asset?</DialogTitle>
-            <DialogDescription>This removes the asset from your portfolio history in FinOS. This action cannot be undone.</DialogDescription>
+            <DialogDescription>This removes the asset from your portfolio history in Aurum. This action cannot be undone.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
@@ -1379,10 +1606,10 @@ function AssetValueLogRow({
   quantity,
   formatLogDate,
 }: {
-  entry: Pick<AssetValueLog, "date" | "price" | "note" | "source">;
+  entry: Pick<AssetValueLog, "date" | "timestamp" | "price" | "note" | "source">;
   currency: Currency;
   quantity: number;
-  formatLogDate: (date: string) => string;
+  formatLogDate: (date: string, timestamp?: string) => string;
 }) {
   const sourceLabel = entry.source === "manual" ? "Manual" : entry.source === "import" ? "Import" : "System";
   const totalValue = entry.price * quantity;
@@ -1392,7 +1619,7 @@ function AssetValueLogRow({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <p className="text-sm font-medium">{formatLogDate(entry.date)}</p>
+            <p className="text-sm font-medium">{formatLogDate(entry.date, "timestamp" in entry ? entry.timestamp : undefined)}</p>
             <Badge variant="outline" className="text-[10px]">{sourceLabel}</Badge>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">

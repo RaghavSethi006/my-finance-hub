@@ -1,7 +1,14 @@
 import { formatCurrency } from './currency';
-import type { Account, Asset, Category, Loan, RecurringTemplate, Transaction, VaultDocument } from './types';
+import type { Account, Asset, AssetValueLog, Category, Loan, RecurringTemplate, Transaction, VaultDocument } from './types';
 
 export type DashboardRangePreset = 'this_week' | 'this_month' | 'this_year' | 'last_30_days' | 'all_time' | 'custom';
+export type MarketRangePreset = 'live' | '1h' | '1d' | '1w' | '1m' | '1y' | 'all' | 'custom';
+
+export interface MarketRangeSelection {
+  preset: MarketRangePreset;
+  customStart?: string;
+  customEnd?: string;
+}
 
 export interface DashboardRangeSelection {
   preset: DashboardRangePreset;
@@ -26,6 +33,11 @@ export interface SmartInsight {
 
 function parseDate(value: string): Date {
   return new Date(`${value}T00:00:00`);
+}
+
+function parseLogDateTime(log: Pick<AssetValueLog, 'date' | 'timestamp'>): Date {
+  const parsed = new Date(log.timestamp ?? `${log.date}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? parseDate(log.date) : parsed;
 }
 
 function startOfDay(date: Date): Date {
@@ -434,12 +446,63 @@ export function buildPortfolioHistory(assets: Asset[], months = 6) {
   });
 }
 
-export function buildAssetValueSeries(asset: Asset) {
-  const valueLogs = [...(asset.valueLogs ?? [])]
-    .sort((left, right) => left.date.localeCompare(right.date))
+function formatMarketTime(date: Date, range: MarketRangePreset): string {
+  if (range === 'live' || range === '1h' || range === '1d') {
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+  if (range === '1w' || range === '1m') {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+}
+
+function resolveMarketRange(selection: MarketRangeSelection, logs: Array<Pick<AssetValueLog, 'date' | 'timestamp'>>, now = new Date()) {
+  const end = selection.preset === 'custom' && selection.customEnd ? endOfDay(parseDate(selection.customEnd)) : now;
+  let start: Date | undefined;
+
+  if (selection.preset === 'live') start = new Date(end.getTime() - 15 * 60 * 1000);
+  if (selection.preset === '1h') start = new Date(end.getTime() - 60 * 60 * 1000);
+  if (selection.preset === '1d') start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+  if (selection.preset === '1w') start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+  if (selection.preset === '1m') start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+  if (selection.preset === '1y') start = new Date(end.getTime() - 365 * 24 * 60 * 60 * 1000);
+  if (selection.preset === 'custom') start = selection.customStart ? startOfDay(parseDate(selection.customStart)) : undefined;
+
+  if (!start) {
+    const firstLog = [...logs].sort((left, right) => parseLogDateTime(left).getTime() - parseLogDateTime(right).getTime())[0];
+    start = firstLog ? parseLogDateTime(firstLog) : startOfDay(end);
+  }
+
+  return { start, end };
+}
+
+function getAssetLogs(asset: Asset): AssetValueLog[] {
+  return asset.valueLogs && asset.valueLogs.length > 0
+    ? asset.valueLogs
+    : [
+        {
+          id: `${asset.id}-current`,
+          date: asset.purchaseDate,
+          price: asset.currentPrice,
+          note: 'Current value snapshot',
+          source: 'system',
+        },
+      ];
+}
+
+export function buildAssetValueSeries(asset: Asset, selection: MarketRangeSelection = { preset: 'all' }) {
+  const logs = getAssetLogs(asset);
+  const range = resolveMarketRange(selection, logs);
+  const valueLogs = [...logs]
+    .filter((log) => {
+      const timestamp = parseLogDateTime(log).getTime();
+      return timestamp >= range.start.getTime() && timestamp <= range.end.getTime();
+    })
+    .sort((left, right) => parseLogDateTime(left).getTime() - parseLogDateTime(right).getTime())
     .map((log) => ({
       date: log.date,
-      label: formatDay(parseDate(log.date)),
+      timestamp: log.timestamp ?? `${log.date}T00:00:00`,
+      label: formatMarketTime(parseLogDateTime(log), selection.preset),
       price: log.price,
       totalValue: log.price * asset.quantity,
       note: log.note,
@@ -453,13 +516,55 @@ export function buildAssetValueSeries(asset: Asset) {
   return [
     {
       date: asset.purchaseDate,
-      label: formatDay(parseDate(asset.purchaseDate)),
+      timestamp: `${asset.purchaseDate}T00:00:00`,
+      label: formatMarketTime(parseDate(asset.purchaseDate), selection.preset),
       price: asset.currentPrice,
       totalValue: asset.currentPrice * asset.quantity,
       note: 'Current value snapshot',
       source: 'system' as const,
     },
   ];
+}
+
+export function buildPortfolioMarketSeries(assets: Asset[], selection: MarketRangeSelection) {
+  const allLogs = assets.flatMap((asset) => getAssetLogs(asset));
+  const range = resolveMarketRange(selection, allLogs);
+  const timestamps = new Set<number>([range.start.getTime(), range.end.getTime()]);
+
+  assets.forEach((asset) => {
+    getAssetLogs(asset).forEach((log) => {
+      const timestamp = parseLogDateTime(log).getTime();
+      if (timestamp >= range.start.getTime() && timestamp <= range.end.getTime()) {
+        timestamps.add(timestamp);
+      }
+    });
+  });
+
+  return [...timestamps]
+    .sort((left, right) => left - right)
+    .map((timestamp) => {
+      const date = new Date(timestamp);
+      let value = 0;
+      let invested = 0;
+      let updates = 0;
+
+      assets.forEach((asset) => {
+        const logs = getAssetLogs(asset).sort((left, right) => parseLogDateTime(left).getTime() - parseLogDateTime(right).getTime());
+        const activeLogs = logs.filter((log) => parseLogDateTime(log).getTime() <= timestamp);
+        const latestLog = activeLogs[activeLogs.length - 1] ?? logs[0];
+        value += (latestLog?.price ?? asset.currentPrice) * asset.quantity;
+        invested += asset.buyPrice * asset.quantity;
+        updates += logs.filter((log) => parseLogDateTime(log).getTime() === timestamp).length;
+      });
+
+      return {
+        timestamp: date.toISOString(),
+        label: formatMarketTime(date, selection.preset),
+        value,
+        invested,
+        updates,
+      };
+    });
 }
 
 export function calculateAssetDepreciation(asset: Asset, asOf = new Date()) {
