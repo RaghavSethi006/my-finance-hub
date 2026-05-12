@@ -104,4 +104,33 @@ jobs:
           assetNamePattern: "Aurum-[version]-[platform]-[arch]-[bundle][setup][ext]"
           tagName: ${{ inputs.release_tag }}
           releaseName: ${{ inputs.release_name }}
-          releaseBody: "Aurum desktop installers built from ${{ github.sha }}."
+          releaseBody: |
+            ## Aurum Desktop
+
+            Aurum is a private, local-first desktop workspace for managing your financial life across transactions, accounts, assets, documents, and tax planning. This release includes signed build artifacts generated from commit `${{ github.sha }}`.
+
+            ## What's Included
+
+            - Native desktop installers for Windows, macOS, and Linux.
+            - The Aurum rebrand with updated application metadata, icons, and interface copy.
+            - Bank statement import for CSV, TXT, and PDF files, including OCR fallback for scanned statements.
+            - Live market price sync and timestamped asset value history for trackable holdings.
+            - Encrypted desktop backup export and restore support for local snapshots and vault files.
+            - Installer automation through GitHub Actions for repeatable desktop builds.
+
+            ## Downloads
+
+            Choose the installer that matches your operating system and CPU architecture from the assets attached to this draft release.
+
+            - Windows: use the `.msi` or setup executable.
+            - macOS Apple Silicon: use the `aarch64` DMG.
+            - macOS Intel: use the `x86_64` DMG.
+            - Linux: use the AppImage, Debian package, or RPM package if available.
+
+            ## Notes
+
+            Aurum stores financial data locally on your machine. No cloud account or third-party sync is required for the core desktop app. Keep a separate encrypted backup before upgrading if you already have important local data.
+
+            ## Verification
+
+            These installers were built by the `Build Installers` GitHub Actions workflow from `${{ github.repository }}` at `${{ github.sha }}`.
