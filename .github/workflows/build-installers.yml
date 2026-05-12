@@ -1,0 +1,97 @@
+name: Build Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: Create a draft GitHub Release and attach installers
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      release_tag:
+        description: Release tag to use when creating a release
+        required: false
+        default: "aurum-v__VERSION__"
+      release_name:
+        description: Release title to use when creating a release
+        required: false
+        default: "Aurum v__VERSION__"
+
+permissions:
+  contents: write
+
+jobs:
+  build-tauri:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows installer
+            platform: windows-latest
+            args: ""
+          - label: macOS Apple Silicon DMG
+            platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - label: macOS Intel DMG
+            platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+          - label: Linux bundles
+            platform: ubuntu-22.04
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build installers as workflow artifacts
+        if: inputs.create_release != 'true'
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.args }}
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: "Aurum-[platform]-[arch]-[bundle]"
+          releaseAssetNamePattern: "Aurum-[version]-[platform]-[arch]-[bundle][setup][ext]"
+
+      - name: Build installers and draft release
+        if: inputs.create_release == 'true'
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.args }}
+          releaseDraft: true
+          prerelease: false
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: "Aurum-[platform]-[arch]-[bundle]"
+          releaseAssetNamePattern: "Aurum-[version]-[platform]-[arch]-[bundle][setup][ext]"
+          tagName: ${{ inputs.release_tag }}
+          releaseName: ${{ inputs.release_name }}
+          releaseBody: "Aurum desktop installers built from ${{ github.sha }}."
