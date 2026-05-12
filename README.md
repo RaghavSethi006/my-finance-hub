@@ -10,7 +10,7 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Stack](https://img.shields.io/badge/stack-React%20%2B%20Tauri%20%2B%20SQLite-orange)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-CCO-green)
 
 </div>
 
